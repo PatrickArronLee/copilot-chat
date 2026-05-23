@@ -18,7 +18,7 @@ class CopilotApiClient {
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
 
-    private val apiUrl = "https://models.inference.ai.azure.com/chat/completions"
+    private val apiUrl = "https://api.githubcopilot.com/chat/completions"
 
     fun streamMessage(
         token: String,
@@ -52,6 +52,8 @@ class CopilotApiClient {
             .post(body.toRequestBody("application/json".toMediaType()))
             .header("Authorization", "Bearer $token")
             .header("Content-Type", "application/json")
+            .header("Copilot-Integration-Id", "vscode-chat")
+            .header("Editor-Version", "vscode/1.85.0")
             .build()
 
         withContext(Dispatchers.IO) {
@@ -85,10 +87,17 @@ class CopilotApiClient {
 
     companion object {
         val AVAILABLE_MODELS = listOf(
-            "gpt-4o-mini" to "GPT-4o Mini (Fast)",
-            "gpt-4o" to "GPT-4o (Smart)",
-            "meta-llama-3.1-70b-instruct" to "Llama 3.1 70B",
-            "mistral-large" to "Mistral Large"
+            "claude-sonnet-4.6" to "Claude Sonnet 4.6 ✦",
+            "gpt-5.4-mini" to "GPT-5.4 Mini (Fast)",
+            "gpt-5.4" to "GPT-5.4 (Smart)",
+            "gpt-4o-mini-2024-07-18" to "GPT-4o Mini",
+            "gpt-4o-2024-11-20" to "GPT-4o",
+            "claude-haiku-4.5" to "Claude Haiku 4.5 (Fast)",
+            "claude-opus-4.5" to "Claude Opus 4.5",
+            "gemini-2.5-pro" to "Gemini 2.5 Pro"
         )
+
+        const val DEFAULT_MODEL = "claude-sonnet-4.6"
     }
 }
+

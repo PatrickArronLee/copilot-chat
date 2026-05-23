@@ -2,6 +2,7 @@ package com.patrick.copilotchat.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.patrick.copilotchat.api.CopilotApiClient
 
 class AppPreferences(context: Context) {
     private val prefs: SharedPreferences =
@@ -12,7 +13,7 @@ class AppPreferences(context: Context) {
         set(value) = prefs.edit().putString("github_token", value).apply()
 
     var selectedModel: String
-        get() = prefs.getString("selected_model", "gpt-4o-mini") ?: "gpt-4o-mini"
+        get() = prefs.getString("selected_model", CopilotApiClient.DEFAULT_MODEL) ?: CopilotApiClient.DEFAULT_MODEL
         set(value) = prefs.edit().putString("selected_model", value).apply()
 
     var systemPrompt: String

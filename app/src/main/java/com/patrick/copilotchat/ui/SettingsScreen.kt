@@ -64,8 +64,8 @@ fun SettingsScreen(
                 value = token,
                 onValueChange = { token = it },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Personal Access Token") },
-                placeholder = { Text("ghp_... or gho_...") },
+                label = { Text("GitHub Copilot Token") },
+                placeholder = { Text("gho_... or ghp_...") },
                 singleLine = true,
                 visualTransformation = if (showToken) VisualTransformation.None else PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
@@ -76,7 +76,7 @@ fun SettingsScreen(
                     }
                 },
                 supportingText = {
-                    Text("github.com/settings/tokens — needs 'repo' scope")
+                    Text("Use your existing Copilot token (gho_) or a PAT from github.com/settings/tokens")
                 }
             )
 
@@ -145,11 +145,15 @@ fun SettingsScreen(
                 )) {
                     Column(modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("How to get a token", style = MaterialTheme.typography.labelMedium)
-                        Text("1. Go to github.com/settings/tokens", style = MaterialTheme.typography.bodySmall)
-                        Text("2. Generate new token (classic)", style = MaterialTheme.typography.bodySmall)
-                        Text("3. Select 'repo' scope → Generate", style = MaterialTheme.typography.bodySmall)
-                        Text("4. Paste the token above", style = MaterialTheme.typography.bodySmall)
+                        Text("Where to find your token", style = MaterialTheme.typography.labelMedium)
+                        Text("Option 1 — Copilot CLI token (easiest):", style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer)
+                        Text("  Run: cat ~/.copilot/config.json", style = MaterialTheme.typography.bodySmall)
+                        Text("  Copy the gho_... value", style = MaterialTheme.typography.bodySmall)
+                        Spacer(Modifier.height(4.dp))
+                        Text("Option 2 — New PAT:", style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer)
+                        Text("  github.com/settings/tokens → Generate new token (classic) → repo scope", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
