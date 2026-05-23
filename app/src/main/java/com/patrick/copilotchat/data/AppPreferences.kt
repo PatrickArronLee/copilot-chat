@@ -10,7 +10,7 @@ class AppPreferences(context: Context) {
 
     var githubToken: String
         get() = prefs.getString("github_token", "") ?: ""
-        set(value) = prefs.edit().putString("github_token", value).apply()
+        set(value) = prefs.edit().putString("github_token", value.trim()).apply()
 
     var selectedModel: String
         get() {

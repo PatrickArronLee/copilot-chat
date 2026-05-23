@@ -56,7 +56,7 @@ class CopilotApiClient {
         val request = Request.Builder()
             .url(apiUrl)
             .post(body.toRequestBody("application/json".toMediaType()))
-            .header("Authorization", "Bearer $token")
+            .header("Authorization", "Bearer ${token.trim()}")
             .header("Content-Type", "application/json")
             .header("Copilot-Integration-Id", "vscode-chat")
             .header("Editor-Version", "vscode/1.85.0")
