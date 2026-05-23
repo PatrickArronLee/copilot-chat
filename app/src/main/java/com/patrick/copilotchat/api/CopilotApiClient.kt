@@ -27,7 +27,8 @@ class CopilotApiClient {
         messages: List<Pair<String, String>>
     ): Flow<String> = flow {
         val messagesArray = JSONArray()
-        if (systemPrompt.isNotBlank()) {
+        // Reasoning models (o1/o3/o4) don't support system messages
+        if (systemPrompt.isNotBlank() && !isReasoningModel(model)) {
             messagesArray.put(JSONObject().apply {
                 put("role", "system")
                 put("content", systemPrompt)
@@ -45,7 +46,7 @@ class CopilotApiClient {
             put("messages", messagesArray)
             put("stream", true)
             // reasoning models use max_completion_tokens, others use max_tokens
-            if (model.startsWith("o3") || model.startsWith("o4")) {
+            if (isReasoningModel(model)) {
                 put("max_completion_tokens", 4096)
             } else {
                 put("max_tokens", 2048)
@@ -90,11 +91,12 @@ class CopilotApiClient {
 
     companion object {
         val AVAILABLE_MODELS = listOf(
-            "gpt-4.1" to "GPT-4.1 (Latest)",
-            "gpt-4o" to "GPT-4o",
+            "gpt-4o" to "GPT-4o (Recommended)",
+            "gpt-4o-mini" to "GPT-4o Mini (Fast)",
             "gpt-4o-2024-11-20" to "GPT-4o (Nov 2024)",
+            "gpt-3.5-turbo" to "GPT-3.5 Turbo",
+            "gpt-4.1" to "GPT-4.1",
             "gpt-4.1-mini" to "GPT-4.1 Mini",
-            "gpt-4o-mini" to "GPT-4o Mini",
             "o4-mini" to "o4-mini (Reasoning)",
             "o3" to "o3 (Reasoning)",
             "claude-3.7-sonnet" to "Claude 3.7 Sonnet",
@@ -103,6 +105,9 @@ class CopilotApiClient {
             "gemini-2.0-flash" to "Gemini 2.0 Flash"
         )
 
-        const val DEFAULT_MODEL = "gpt-4.1"
+        const val DEFAULT_MODEL = "gpt-4o"
+
+        /** Reasoning models that reject system messages and use max_completion_tokens */
+        fun isReasoningModel(model: String) = model.startsWith("o1") || model.startsWith("o3") || model.startsWith("o4")
     }
 }
