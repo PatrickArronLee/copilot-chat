@@ -87,17 +87,14 @@ class CopilotApiClient {
 
     companion object {
         val AVAILABLE_MODELS = listOf(
-            "claude-sonnet-4.6" to "Claude Sonnet 4.6 ✦",
-            "gpt-5.4-mini" to "GPT-5.4 Mini (Fast)",
-            "gpt-5.4" to "GPT-5.4 (Smart)",
-            "gpt-4o-mini-2024-07-18" to "GPT-4o Mini",
-            "gpt-4o-2024-11-20" to "GPT-4o",
-            "claude-haiku-4.5" to "Claude Haiku 4.5 (Fast)",
-            "claude-opus-4.5" to "Claude Opus 4.5",
-            "gemini-2.5-pro" to "Gemini 2.5 Pro"
+            "gpt-4o" to "GPT-4o (Smart)",
+            "gpt-4o-2024-11-20" to "GPT-4o (Nov 2024)",
+            "gpt-4o-mini" to "GPT-4o Mini (Fast)",
+            "gpt-4o-mini-2024-07-18" to "GPT-4o Mini (Jul 2024)",
+            "gpt-3.5-turbo" to "GPT-3.5 Turbo"
         )
 
-        const val DEFAULT_MODEL = "claude-sonnet-4.6"
+        const val DEFAULT_MODEL = "gpt-4o"
     }
 }
 

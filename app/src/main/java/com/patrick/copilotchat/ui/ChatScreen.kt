@@ -1,7 +1,9 @@
 package com.patrick.copilotchat.ui
 
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -20,6 +22,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -55,7 +59,7 @@ fun ChatScreen(
                 title = {
                     Column {
                         Text("Copilot AI", style = MaterialTheme.typography.titleMedium)
-                        Text("GitHub Models", style = MaterialTheme.typography.labelSmall,
+                        Text("GitHub Copilot", style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 },
@@ -184,7 +188,7 @@ private fun WelcomeScreen() {
             Spacer(Modifier.height(16.dp))
             Text("Copilot AI", style = MaterialTheme.typography.headlineMedium)
             Spacer(Modifier.height(8.dp))
-            Text("Powered by GitHub Models",
+            Text("Powered by GitHub Copilot",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(4.dp))
@@ -195,9 +199,19 @@ private fun WelcomeScreen() {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MessageBubble(message: Message) {
     val isUser = message.role == MessageRole.USER
+    val clipboardManager = LocalClipboardManager.current
+    var copied by remember { mutableStateOf(false) }
+
+    LaunchedEffect(copied) {
+        if (copied) {
+            kotlinx.coroutines.delay(2000)
+            copied = false
+        }
+    }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -229,7 +243,14 @@ private fun MessageBubble(message: Message) {
                 ),
                 color = if (isUser) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.surfaceVariant,
-                tonalElevation = if (isUser) 0.dp else 1.dp
+                tonalElevation = if (isUser) 0.dp else 1.dp,
+                modifier = Modifier.combinedClickable(
+                    onClick = {},
+                    onLongClick = {
+                        clipboardManager.setText(AnnotatedString(message.content))
+                        copied = true
+                    }
+                )
             ) {
                 if (message.isLoading && message.content.isEmpty()) {
                     TypingIndicator(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
@@ -242,6 +263,11 @@ private fun MessageBubble(message: Message) {
                         else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+            }
+            if (copied) {
+                Text("Copied!", style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
             }
         }
 
