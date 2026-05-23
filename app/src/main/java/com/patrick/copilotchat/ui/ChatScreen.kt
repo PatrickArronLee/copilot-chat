@@ -453,7 +453,7 @@ private fun MessageBubble(message: Message) {
                     }
                 )
             ) {
-                if (message.isLoading && message.content.isBlank()) {
+                if (message.isLoading || message.content.isBlank()) {
                     TypingIndicator(
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)
                     )

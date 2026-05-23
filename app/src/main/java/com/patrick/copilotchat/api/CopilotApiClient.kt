@@ -70,14 +70,12 @@ class CopilotApiClient {
                         val data = line.removePrefix("data: ").trim()
                         if (data == "[DONE]") break
                         try {
-                            val chunk = JSONObject(data)
-                            val delta = chunk
-                                .getJSONArray("choices")
-                                .getJSONObject(0)
-                                .getJSONObject("delta")
-                            if (delta.has("content")) {
-                                emit(delta.getString("content"))
-                            }
+                            val choices = JSONObject(data).getJSONArray("choices")
+                            if (choices.length() == 0) continue
+                            val delta = choices.getJSONObject(0).getJSONObject("delta")
+                            // use optString so null JSON values become "" not "null"
+                            val text = delta.optString("content", "")
+                            if (text.isNotEmpty()) emit(text)
                         } catch (_: Exception) { /* skip malformed chunks */ }
                     }
                 }
