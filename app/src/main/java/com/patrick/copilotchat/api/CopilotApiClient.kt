@@ -74,7 +74,8 @@ class CopilotApiClient {
                         val choices = JSONObject(data).getJSONArray("choices")
                         if (choices.length() == 0) continue
                         val delta = choices.getJSONObject(0).getJSONObject("delta")
-                        val text = delta.optString("content", "")
+                        // optString returns "null" string for JSON null — use isNull guard
+                        val text = if (!delta.isNull("content")) delta.optString("content", "") else ""
                         if (text.isNotEmpty()) emit(text)
                     } catch (_: Exception) { /* skip malformed chunks */ }
                 }
