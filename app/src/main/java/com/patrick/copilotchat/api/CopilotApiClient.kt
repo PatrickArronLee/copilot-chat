@@ -1,0 +1,94 @@
+package com.patrick.copilotchat.api
+
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.concurrent.TimeUnit
+
+class CopilotApiClient {
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .build()
+
+    private val apiUrl = "https://models.inference.ai.azure.com/chat/completions"
+
+    fun streamMessage(
+        token: String,
+        model: String,
+        systemPrompt: String,
+        messages: List<Pair<String, String>>  // role, content
+    ): Flow<String> = flow {
+        val messagesArray = JSONArray()
+        if (systemPrompt.isNotBlank()) {
+            messagesArray.put(JSONObject().apply {
+                put("role", "system")
+                put("content", systemPrompt)
+            })
+        }
+        messages.forEach { (role, content) ->
+            messagesArray.put(JSONObject().apply {
+                put("role", role)
+                put("content", content)
+            })
+        }
+
+        val body = JSONObject().apply {
+            put("model", model)
+            put("messages", messagesArray)
+            put("stream", true)
+            put("max_tokens", 2048)
+        }.toString()
+
+        val request = Request.Builder()
+            .url(apiUrl)
+            .post(body.toRequestBody("application/json".toMediaType()))
+            .header("Authorization", "Bearer $token")
+            .header("Content-Type", "application/json")
+            .build()
+
+        withContext(Dispatchers.IO) {
+            val response = client.newCall(request).execute()
+            if (!response.isSuccessful) {
+                val errorBody = response.body?.string() ?: "Unknown error"
+                throw Exception("API error ${response.code}: $errorBody")
+            }
+
+            response.body?.source()?.let { source ->
+                while (!source.exhausted()) {
+                    val line = source.readUtf8Line() ?: break
+                    if (line.startsWith("data: ")) {
+                        val data = line.removePrefix("data: ").trim()
+                        if (data == "[DONE]") break
+                        try {
+                            val chunk = JSONObject(data)
+                            val delta = chunk
+                                .getJSONArray("choices")
+                                .getJSONObject(0)
+                                .getJSONObject("delta")
+                            if (delta.has("content")) {
+                                emit(delta.getString("content"))
+                            }
+                        } catch (_: Exception) { /* skip malformed chunks */ }
+                    }
+                }
+            }
+        }
+    }
+
+    companion object {
+        val AVAILABLE_MODELS = listOf(
+            "gpt-4o-mini" to "GPT-4o Mini (Fast)",
+            "gpt-4o" to "GPT-4o (Smart)",
+            "meta-llama-3.1-70b-instruct" to "Llama 3.1 70B",
+            "mistral-large" to "Mistral Large"
+        )
+    }
+}
