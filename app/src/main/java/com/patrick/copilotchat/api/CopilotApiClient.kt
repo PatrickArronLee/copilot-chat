@@ -91,11 +91,11 @@ class CopilotApiClient {
 
     companion object {
         val AVAILABLE_MODELS = listOf(
+            // Claude (default first)
+            "claude-sonnet-4.6" to "Claude Sonnet 4.6 (Default)",
+            "claude-sonnet-4.5" to "Claude Sonnet 4.5",
+            "claude-haiku-4.5"  to "Claude Haiku 4.5",
             // GPT-5 family
-            "gpt-5.5"        to "GPT-5.5",
-            "gpt-5.4"        to "GPT-5.4",
-            "gpt-5.3-codex"  to "GPT-5.3 Codex",
-            "gpt-5.2-codex"  to "GPT-5.2 Codex",
             "gpt-5.2"        to "GPT-5.2",
             "gpt-5-mini"     to "GPT-5 Mini",
             // GPT-4 family
@@ -104,12 +104,6 @@ class CopilotApiClient {
             "gpt-4o-mini"    to "GPT-4o Mini",
             "gpt-4"          to "GPT-4",
             "gpt-3.5-turbo"  to "GPT-3.5 Turbo",
-            // Claude
-            "claude-opus-4.7"   to "Claude Opus 4.7",
-            "claude-opus-4.5"   to "Claude Opus 4.5",
-            "claude-sonnet-4.6" to "Claude Sonnet 4.6 (Default)",
-            "claude-sonnet-4.5" to "Claude Sonnet 4.5",
-            "claude-haiku-4.5"  to "Claude Haiku 4.5",
             // Gemini
             "gemini-2.5-pro" to "Gemini 2.5 Pro"
         )
