@@ -38,7 +38,7 @@ class ChatViewModel(
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
 
-    private val _currentModel = MutableStateFlow(_activeConversation.value?.modelId ?: prefs.selectedModel)
+    private val _currentModel = MutableStateFlow(resolveModel(_activeConversation.value?.modelId ?: prefs.selectedModel))
     val currentModel: StateFlow<String> = _currentModel
 
     private var currentRequestJob: Job? = null
@@ -149,8 +149,9 @@ class ChatViewModel(
 
     fun switchConversation(id: String) {
         _conversations.value.firstOrNull { it.id == id }?.let { conversation ->
-            prefs.selectedModel = conversation.modelId
-            setActiveConversation(conversation)
+            val model = resolveModel(conversation.modelId)
+            prefs.selectedModel = model
+            setActiveConversation(conversation.copy(modelId = model))
         }
     }
 
@@ -316,7 +317,7 @@ class ChatViewModel(
     private fun setActiveConversation(conversation: Conversation) {
         _activeConversation.value = conversation
         _messages.value = conversation.messages
-        _currentModel.value = conversation.modelId
+        _currentModel.value = resolveModel(conversation.modelId)
     }
 
     private fun persistConversation(conversation: Conversation, activate: Boolean = true) {
@@ -333,5 +334,11 @@ class ChatViewModel(
         currentRequestJob = null
         streamingConversationId = null
         _isLoading.value = false
+    }
+
+    /** Validates a model ID; falls back to DEFAULT_MODEL if not in the supported list. */
+    private fun resolveModel(modelId: String): String {
+        val valid = CopilotApiClient.AVAILABLE_MODELS.map { it.first }
+        return if (modelId in valid) modelId else CopilotApiClient.DEFAULT_MODEL
     }
 }
