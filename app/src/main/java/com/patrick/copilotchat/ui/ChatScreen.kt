@@ -1,28 +1,94 @@
 package com.patrick.copilotchat.ui
 
-import androidx.compose.animation.core.*
+import android.app.Activity
+import android.content.Intent
+import android.speech.RecognizerIntent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.*
-import androidx.compose.foundation.shape.*
-import androidx.compose.foundation.text.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.weight
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberDrawerState
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.input.*
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.patrick.copilotchat.api.CopilotApiClient
-import com.patrick.copilotchat.data.*
+import com.patrick.copilotchat.data.Conversation
+import com.patrick.copilotchat.data.Message
+import com.patrick.copilotchat.data.MessageRole
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -38,12 +104,30 @@ fun ChatScreen(
     val error by viewModel.error.collectAsState()
     val currentModel by viewModel.currentModel.collectAsState()
 
+    val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
     var inputText by remember { mutableStateOf("") }
     var showModelPicker by remember { mutableStateOf(false) }
-    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var actionMessage by remember { mutableStateOf<Message?>(null) }
+    var copiedMessageId by remember { mutableStateOf<String?>(null) }
+    val drawerState = rememberDrawerState(initialValue = androidx.compose.material3.DrawerValue.Closed)
+    val modelSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val actionSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    val lastAssistantId = messages.lastOrNull { it.role == MessageRole.ASSISTANT }?.id
+
+    val voiceLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val recognized = result.data
+                ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+                ?.firstOrNull()
+                ?: return@rememberLauncherForActivityResult
+            inputText = if (inputText.isBlank()) recognized else "$inputText $recognized"
+        }
+    }
 
     fun closeDrawer() {
         scope.launch { drawerState.close() }
@@ -57,9 +141,41 @@ fun ChatScreen(
         }
     }
 
+    fun shareText(text: String, subject: String, chooserTitle: String) {
+        if (text.isBlank()) return
+        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, text)
+            putExtra(Intent.EXTRA_SUBJECT, subject)
+        }
+        context.startActivity(Intent.createChooser(shareIntent, chooserTitle))
+    }
+
+    fun copyMessage(message: Message) {
+        clipboardManager.setText(AnnotatedString(message.content))
+        copiedMessageId = message.id
+    }
+
+    fun openVoiceInput() {
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+            )
+        }
+        voiceLauncher.launch(intent)
+    }
+
     LaunchedEffect(messages.size, isLoading) {
         if (messages.isNotEmpty()) {
             listState.animateScrollToItem(messages.lastIndex)
+        }
+    }
+
+    LaunchedEffect(copiedMessageId) {
+        if (copiedMessageId != null) {
+            delay(2000)
+            copiedMessageId = null
         }
     }
 
@@ -86,6 +202,7 @@ fun ChatScreen(
         Scaffold(
             topBar = {
                 CenterAlignedTopAppBar(
+                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(),
                     navigationIcon = {
                         IconButton(onClick = { scope.launch { drawerState.open() } }) {
                             Icon(Icons.Default.Menu, contentDescription = "Open menu")
@@ -111,6 +228,17 @@ fun ChatScreen(
                             IconButton(onClick = viewModel::clearActiveMessages) {
                                 Icon(Icons.Default.Delete, contentDescription = "Clear chat")
                             }
+                            IconButton(
+                                onClick = {
+                                    shareText(
+                                        text = viewModel.getShareText(),
+                                        subject = "Copilot Chat",
+                                        chooserTitle = "Share conversation"
+                                    )
+                                }
+                            ) {
+                                Icon(Icons.Default.Share, contentDescription = "Share conversation")
+                            }
                         }
                         IconButton(onClick = onSettingsClick) {
                             Icon(Icons.Default.Settings, contentDescription = "Settings")
@@ -123,7 +251,9 @@ fun ChatScreen(
                     value = inputText,
                     onValueChange = { inputText = it },
                     onSend = ::submitMessage,
-                    enabled = !isLoading
+                    onStop = viewModel::cancelStreaming,
+                    onVoiceInput = ::openVoiceInput,
+                    isLoading = isLoading
                 )
             }
         ) { paddingValues ->
@@ -150,7 +280,15 @@ fun ChatScreen(
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             items(messages, key = { it.id }) { message ->
-                                MessageBubble(message = message)
+                                MessageBubble(
+                                    message = message,
+                                    isLastAssistant = !isLoading &&
+                                        message.role == MessageRole.ASSISTANT &&
+                                        message.id == lastAssistantId,
+                                    onRegenerate = viewModel::regenerateLastResponse,
+                                    onLongPress = { actionMessage = message },
+                                    isCopied = copiedMessageId == message.id
+                                )
                             }
                         }
                     }
@@ -162,7 +300,7 @@ fun ChatScreen(
     if (showModelPicker) {
         ModalBottomSheet(
             onDismissRequest = { showModelPicker = false },
-            sheetState = sheetState
+            sheetState = modelSheetState
         ) {
             ModelPickerSheet(
                 currentModel = currentModel,
@@ -171,6 +309,48 @@ fun ChatScreen(
                     showModelPicker = false
                 }
             )
+        }
+    }
+
+    actionMessage?.let { message ->
+        ModalBottomSheet(
+            onDismissRequest = { actionMessage = null },
+            sheetState = actionSheetState
+        ) {
+            Column(modifier = Modifier.padding(bottom = 24.dp)) {
+                ListItem(
+                    headlineContent = { Text("Copy message") },
+                    leadingContent = {
+                        Icon(Icons.Default.ContentCopy, contentDescription = null)
+                    },
+                    modifier = Modifier.clickable {
+                        copyMessage(message)
+                        actionMessage = null
+                    }
+                )
+                ListItem(
+                    headlineContent = { Text("Share message") },
+                    leadingContent = {
+                        Icon(Icons.Default.Share, contentDescription = null)
+                    },
+                    modifier = Modifier.clickable {
+                        shareText(message.content, "Copilot Chat", "Share message")
+                        actionMessage = null
+                    }
+                )
+                if (message.role == MessageRole.ASSISTANT && !isLoading) {
+                    ListItem(
+                        headlineContent = { Text("Regenerate") },
+                        leadingContent = {
+                            Icon(Icons.Default.Refresh, contentDescription = null)
+                        },
+                        modifier = Modifier.clickable {
+                            viewModel.regenerateLastResponse()
+                            actionMessage = null
+                        }
+                    )
+                }
+            }
         }
     }
 }
@@ -209,7 +389,7 @@ private fun DrawerContent(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        Button(
+        androidx.compose.material3.Button(
             onClick = onNewChat,
             modifier = Modifier
                 .fillMaxWidth()
@@ -304,7 +484,9 @@ private fun InputBar(
     value: String,
     onValueChange: (String) -> Unit,
     onSend: () -> Unit,
-    enabled: Boolean
+    onStop: () -> Unit,
+    onVoiceInput: () -> Unit,
+    isLoading: Boolean
 ) {
     Surface(shadowElevation = 8.dp) {
         Row(
@@ -315,25 +497,50 @@ private fun InputBar(
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.Bottom
         ) {
-            OutlinedTextField(
+            FilledIconButton(
+                onClick = onVoiceInput,
+                enabled = !isLoading,
+                modifier = Modifier.size(48.dp),
+                shape = CircleShape
+            ) {
+                Icon(Icons.Default.Mic, contentDescription = "Voice input")
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            androidx.compose.material3.OutlinedTextField(
                 value = value,
                 onValueChange = onValueChange,
                 modifier = Modifier.weight(1f),
-                enabled = enabled,
+                enabled = !isLoading,
                 placeholder = { Text("Message Copilot...") },
                 shape = RoundedCornerShape(26.dp),
                 maxLines = 5,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { onSend() })
+                keyboardActions = KeyboardActions(onSend = {
+                    if (!isLoading) onSend()
+                })
             )
             Spacer(modifier = Modifier.width(8.dp))
-            FilledIconButton(
-                onClick = onSend,
-                enabled = enabled && value.isNotBlank(),
-                modifier = Modifier.size(48.dp),
-                shape = CircleShape
-            ) {
-                Icon(Icons.Default.ArrowUpward, contentDescription = "Send")
+            if (isLoading) {
+                FilledIconButton(
+                    onClick = onStop,
+                    modifier = Modifier.size(48.dp),
+                    shape = CircleShape,
+                    colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError
+                    )
+                ) {
+                    Icon(Icons.Default.Stop, contentDescription = "Stop generation")
+                }
+            } else {
+                FilledIconButton(
+                    onClick = onSend,
+                    enabled = value.isNotBlank(),
+                    modifier = Modifier.size(48.dp),
+                    shape = CircleShape
+                ) {
+                    Icon(Icons.Default.ArrowUpward, contentDescription = "Send")
+                }
             }
         }
     }
@@ -398,17 +605,14 @@ private fun WelcomeScreen() {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageBubble(message: Message) {
+private fun MessageBubble(
+    message: Message,
+    isLastAssistant: Boolean,
+    onRegenerate: () -> Unit,
+    onLongPress: () -> Unit,
+    isCopied: Boolean
+) {
     val isUser = message.role == MessageRole.USER
-    val clipboardManager = LocalClipboardManager.current
-    var copied by remember { mutableStateOf(false) }
-
-    LaunchedEffect(copied) {
-        if (copied) {
-            kotlinx.coroutines.delay(2000)
-            copied = false
-        }
-    }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -447,31 +651,49 @@ private fun MessageBubble(message: Message) {
                 },
                 modifier = Modifier.combinedClickable(
                     onClick = {},
-                    onLongClick = {
-                        clipboardManager.setText(AnnotatedString(message.content))
-                        copied = true
-                    }
+                    onLongClick = onLongPress
                 )
             ) {
-                if (message.isLoading && message.content.isBlank()) {
-                    TypingIndicator(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)
-                    )
-                } else {
-                    Text(
-                        text = message.content,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (isUser) {
-                            MaterialTheme.colorScheme.onPrimary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        }
+                when {
+                    message.isLoading && message.content.isBlank() -> {
+                        TypingIndicator(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)
+                        )
+                    }
+
+                    isUser -> {
+                        Text(
+                            text = message.content,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onPrimary
+                        )
+                    }
+
+                    else -> {
+                        MarkdownText(
+                            text = message.content,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            if (isLastAssistant) {
+                IconButton(
+                    onClick = onRegenerate,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Refresh,
+                        contentDescription = "Regenerate response",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
 
-            if (copied) {
+            if (isCopied) {
                 Text(
                     text = "Copied!",
                     style = MaterialTheme.typography.labelSmall,

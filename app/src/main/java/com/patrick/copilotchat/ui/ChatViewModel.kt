@@ -199,6 +199,106 @@ class ChatViewModel(
         _error.value = null
     }
 
+    fun regenerateLastResponse() {
+        if (_isLoading.value) return
+        val msgs = _messages.value
+        val lastAssistantIdx = msgs.indexOfLast { it.role == MessageRole.ASSISTANT }
+        if (lastAssistantIdx < 0) return
+        msgs.take(lastAssistantIdx).lastOrNull { it.role == MessageRole.USER } ?: return
+        val conversation = _activeConversation.value ?: return
+        val trimmedMessages = msgs.take(lastAssistantIdx)
+        val trimmedConversation = conversation.copy(messages = trimmedMessages)
+        persistConversation(trimmedConversation)
+
+        _error.value = null
+        _isLoading.value = true
+        val assistantId = UUID.randomUUID().toString()
+        val loadingMessage = Message(
+            id = assistantId,
+            role = MessageRole.ASSISTANT,
+            content = "",
+            isLoading = true
+        )
+        persistInMemory(trimmedConversation.copy(messages = trimmedConversation.messages + loadingMessage))
+
+        currentRequestJob?.cancel()
+        streamingConversationId = trimmedConversation.id
+        currentRequestJob = viewModelScope.launch {
+            val history = trimmedConversation.messages.map { message ->
+                (if (message.role == MessageRole.USER) "user" else "assistant") to message.content
+            }
+
+            var fullResponse = ""
+            var failed = false
+
+            api.streamMessage(
+                token = prefs.githubToken,
+                model = _currentModel.value,
+                systemPrompt = prefs.systemPrompt,
+                messages = history
+            ).catch { throwable ->
+                if (throwable is CancellationException) throw throwable
+                failed = true
+                val errorMessage = throwable.message ?: "Unknown error"
+                _error.value = errorMessage
+                persistConversation(
+                    trimmedConversation.copy(
+                        messages = trimmedConversation.messages + Message(
+                            id = assistantId,
+                            role = MessageRole.ASSISTANT,
+                            content = "Error: $errorMessage"
+                        )
+                    ),
+                    activate = _activeConversation.value?.id == trimmedConversation.id
+                )
+                _isLoading.value = false
+                streamingConversationId = null
+            }.collect { chunk ->
+                fullResponse += chunk
+                persistInMemory(
+                    trimmedConversation.copy(
+                        messages = trimmedConversation.messages + Message(
+                            id = assistantId,
+                            role = MessageRole.ASSISTANT,
+                            content = fullResponse,
+                            isLoading = false
+                        )
+                    )
+                )
+            }
+
+            if (!failed) {
+                persistConversation(
+                    trimmedConversation.copy(
+                        messages = trimmedConversation.messages + Message(
+                            id = assistantId,
+                            role = MessageRole.ASSISTANT,
+                            content = fullResponse
+                        )
+                    ),
+                    activate = _activeConversation.value?.id == trimmedConversation.id
+                )
+                _isLoading.value = false
+                streamingConversationId = null
+            }
+        }
+    }
+
+    fun getShareText(): String {
+        val conv = _activeConversation.value ?: return ""
+        val sb = StringBuilder()
+        sb.appendLine("# ${conv.title}")
+        sb.appendLine("Model: ${conv.modelId}")
+        sb.appendLine()
+        _messages.value.forEach { msg ->
+            val role = if (msg.role == MessageRole.USER) "You" else "Copilot"
+            sb.appendLine("**$role:**")
+            sb.appendLine(msg.content)
+            sb.appendLine()
+        }
+        return sb.toString()
+    }
+
     private fun persistInMemory(conversation: Conversation) {
         val storedConversation = conversation.copy(
             messages = conversation.messages.map { it.copy(isLoading = false) }
@@ -228,7 +328,7 @@ class ChatViewModel(
         }
     }
 
-    private fun cancelStreaming() {
+    fun cancelStreaming() {
         currentRequestJob?.cancel()
         currentRequestJob = null
         streamingConversationId = null
