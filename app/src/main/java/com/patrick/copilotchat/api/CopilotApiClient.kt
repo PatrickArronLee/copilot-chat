@@ -91,18 +91,27 @@ class CopilotApiClient {
 
     companion object {
         val AVAILABLE_MODELS = listOf(
-            "gpt-4o" to "GPT-4o (Recommended)",
-            "gpt-4o-mini" to "GPT-4o Mini (Fast)",
-            "gpt-4o-2024-11-20" to "GPT-4o (Nov 2024)",
-            "gpt-3.5-turbo" to "GPT-3.5 Turbo",
-            "gpt-4.1" to "GPT-4.1",
-            "gpt-4.1-mini" to "GPT-4.1 Mini",
-            "o4-mini" to "o4-mini (Reasoning)",
-            "o3" to "o3 (Reasoning)",
-            "claude-3.7-sonnet" to "Claude 3.7 Sonnet",
-            "claude-3.5-sonnet" to "Claude 3.5 Sonnet",
-            "claude-3.5-haiku" to "Claude 3.5 Haiku",
-            "gemini-2.0-flash" to "Gemini 2.0 Flash"
+            // GPT-5 family
+            "gpt-5.5"        to "GPT-5.5",
+            "gpt-5.4"        to "GPT-5.4",
+            "gpt-5.3-codex"  to "GPT-5.3 Codex",
+            "gpt-5.2-codex"  to "GPT-5.2 Codex",
+            "gpt-5.2"        to "GPT-5.2",
+            "gpt-5-mini"     to "GPT-5 Mini",
+            // GPT-4 family
+            "gpt-4.1"        to "GPT-4.1",
+            "gpt-4o"         to "GPT-4o (Recommended)",
+            "gpt-4o-mini"    to "GPT-4o Mini",
+            "gpt-4"          to "GPT-4",
+            "gpt-3.5-turbo"  to "GPT-3.5 Turbo",
+            // Claude
+            "claude-opus-4.7"   to "Claude Opus 4.7",
+            "claude-opus-4.5"   to "Claude Opus 4.5",
+            "claude-sonnet-4.6" to "Claude Sonnet 4.6",
+            "claude-sonnet-4.5" to "Claude Sonnet 4.5",
+            "claude-haiku-4.5"  to "Claude Haiku 4.5",
+            // Gemini
+            "gemini-2.5-pro" to "Gemini 2.5 Pro"
         )
 
         const val DEFAULT_MODEL = "gpt-4o"
