@@ -8,6 +8,7 @@ import androidx.compose.runtime.*
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.patrick.copilotchat.data.AppPreferences
+import com.patrick.copilotchat.data.ConversationRepository
 import com.patrick.copilotchat.ui.ChatScreen
 import com.patrick.copilotchat.ui.ChatViewModel
 import com.patrick.copilotchat.ui.SettingsScreen
@@ -16,6 +17,7 @@ import com.patrick.copilotchat.ui.theme.CopilotChatTheme
 class MainActivity : ComponentActivity() {
 
     private lateinit var prefs: AppPreferences
+    private lateinit var repo: ConversationRepository
     private lateinit var viewModel: ChatViewModel
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -23,10 +25,11 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         prefs = AppPreferences(applicationContext)
+        repo = ConversationRepository(applicationContext)
         viewModel = ViewModelProvider(this, object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                ChatViewModel(prefs) as T
+                ChatViewModel(prefs, repo) as T
         })[ChatViewModel::class.java]
 
         setContent {

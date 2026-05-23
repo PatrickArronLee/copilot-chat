@@ -5,17 +5,11 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.lazy.*
+import androidx.compose.foundation.shape.*
+import androidx.compose.foundation.text.*
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowUpward
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -24,177 +18,380 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.*
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.patrick.copilotchat.data.Message
-import com.patrick.copilotchat.data.MessageRole
+import com.patrick.copilotchat.api.CopilotApiClient
+import com.patrick.copilotchat.data.*
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ChatScreen(
     viewModel: ChatViewModel,
     onSettingsClick: () -> Unit
 ) {
+    val conversations by viewModel.conversations.collectAsState()
+    val activeConversation by viewModel.activeConversation.collectAsState()
     val messages by viewModel.messages.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val error by viewModel.error.collectAsState()
-    var inputText by remember { mutableStateOf("") }
-    val listState = rememberLazyListState()
-    val coroutineScope = rememberCoroutineScope()
-    var showClearDialog by remember { mutableStateOf(false) }
+    val currentModel by viewModel.currentModel.collectAsState()
 
-    LaunchedEffect(messages.size) {
+    var inputText by remember { mutableStateOf("") }
+    var showModelPicker by remember { mutableStateOf(false) }
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+
+    fun closeDrawer() {
+        scope.launch { drawerState.close() }
+    }
+
+    fun submitMessage() {
+        val text = inputText.trim()
+        if (text.isNotEmpty() && !isLoading) {
+            viewModel.sendMessage(text)
+            inputText = ""
+        }
+    }
+
+    LaunchedEffect(messages.size, isLoading) {
         if (messages.isNotEmpty()) {
-            coroutineScope.launch {
-                listState.animateScrollToItem(messages.size - 1)
+            listState.animateScrollToItem(messages.lastIndex)
+        }
+    }
+
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet {
+                DrawerContent(
+                    conversations = conversations.sortedByDescending { it.createdAt },
+                    activeConversationId = activeConversation?.id,
+                    onNewChat = {
+                        viewModel.newConversation()
+                        closeDrawer()
+                    },
+                    onConversationClick = { id ->
+                        viewModel.switchConversation(id)
+                        closeDrawer()
+                    },
+                    onConversationDelete = viewModel::deleteConversation
+                )
+            }
+        }
+    ) {
+        Scaffold(
+            topBar = {
+                CenterAlignedTopAppBar(
+                    navigationIcon = {
+                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                            Icon(Icons.Default.Menu, contentDescription = "Open menu")
+                        }
+                    },
+                    title = {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("Copilot AI", style = MaterialTheme.typography.titleMedium)
+                            TextButton(
+                                onClick = { showModelPicker = true },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                            ) {
+                                Text(
+                                    text = modelShortLabel(currentModel),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    },
+                    actions = {
+                        if (messages.isNotEmpty()) {
+                            IconButton(onClick = viewModel::clearActiveMessages) {
+                                Icon(Icons.Default.Delete, contentDescription = "Clear chat")
+                            }
+                        }
+                        IconButton(onClick = onSettingsClick) {
+                            Icon(Icons.Default.Settings, contentDescription = "Settings")
+                        }
+                    }
+                )
+            },
+            bottomBar = {
+                InputBar(
+                    value = inputText,
+                    onValueChange = { inputText = it },
+                    onSend = ::submitMessage,
+                    enabled = !isLoading
+                )
+            }
+        ) { paddingValues ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues)
+            ) {
+                error?.let {
+                    ErrorBanner(
+                        message = it,
+                        onDismiss = viewModel::dismissError
+                    )
+                }
+
+                Box(modifier = Modifier.fillMaxSize()) {
+                    if (messages.isEmpty()) {
+                        WelcomeScreen()
+                    } else {
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            items(messages, key = { it.id }) { message ->
+                                MessageBubble(message = message)
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text("Copilot AI", style = MaterialTheme.typography.titleMedium)
-                        Text("GitHub Copilot", style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                },
-                actions = {
-                    if (messages.isNotEmpty()) {
-                        IconButton(onClick = { showClearDialog = true }) {
-                            Icon(Icons.Default.Delete, contentDescription = "Clear chat")
-                        }
-                    }
-                    IconButton(onClick = onSettingsClick) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                )
+    if (showModelPicker) {
+        ModalBottomSheet(
+            onDismissRequest = { showModelPicker = false },
+            sheetState = sheetState
+        ) {
+            ModelPickerSheet(
+                currentModel = currentModel,
+                onModelSelected = { modelId ->
+                    viewModel.setModel(modelId)
+                    showModelPicker = false
+                }
             )
-        },
-        bottomBar = {
-            Surface(shadowElevation = 8.dp) {
-                Row(
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun DrawerContent(
+    conversations: List<Conversation>,
+    activeConversationId: String?,
+    onNewChat: () -> Unit,
+    onConversationClick: (String) -> Unit,
+    onConversationDelete: (String) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxHeight()
+            .widthIn(min = 280.dp, max = 320.dp)
+            .padding(horizontal = 12.dp, vertical = 16.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("✦", fontSize = 18.sp)
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Text("Copilot AI", style = MaterialTheme.typography.titleLarge)
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Button(
+            onClick = onNewChat,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp),
+            shape = RoundedCornerShape(18.dp)
+        ) {
+            Text("New Chat")
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(conversations, key = { it.id }) { conversation ->
+                val isActive = conversation.id == activeConversationId
+                Surface(
+                    color = if (isActive) {
+                        MaterialTheme.colorScheme.secondaryContainer
+                    } else {
+                        Color.Transparent
+                    },
+                    shape = RoundedCornerShape(18.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                        .navigationBarsPadding()
-                        .imePadding(),
-                    verticalAlignment = Alignment.Bottom
+                        .combinedClickable(
+                            onClick = { onConversationClick(conversation.id) },
+                            onLongClick = { onConversationDelete(conversation.id) }
+                        )
                 ) {
-                    OutlinedTextField(
-                        value = inputText,
-                        onValueChange = { inputText = it },
-                        modifier = Modifier.weight(1f),
-                        placeholder = { Text("Message Copilot...") },
-                        shape = RoundedCornerShape(24.dp),
-                        maxLines = 5,
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                        keyboardActions = KeyboardActions(onSend = {
-                            if (inputText.isNotBlank()) {
-                                viewModel.sendMessage(inputText)
-                                inputText = ""
-                            }
-                        })
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    FilledIconButton(
-                        onClick = {
-                            if (inputText.isNotBlank()) {
-                                viewModel.sendMessage(inputText)
-                                inputText = ""
-                            }
-                        },
-                        enabled = inputText.isNotBlank() && !isLoading,
-                        modifier = Modifier.size(48.dp),
-                        shape = CircleShape
-                    ) {
-                        Icon(Icons.Default.ArrowUpward, contentDescription = "Send",
-                            modifier = Modifier.size(22.dp))
-                    }
-                }
-            }
-        }
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
-            error?.let { errorMsg ->
-                Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(errorMsg, modifier = Modifier.weight(1f),
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            style = MaterialTheme.typography.bodySmall)
-                        TextButton(onClick = { viewModel.dismissError() }) {
-                            Text("Dismiss", color = MaterialTheme.colorScheme.onErrorContainer)
-                        }
-                    }
-                }
-            }
-
-            if (messages.isEmpty()) {
-                WelcomeScreen()
-            } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    items(messages, key = { it.id }) { message ->
-                        MessageBubble(message = message)
+                    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+                        Text(
+                            text = conversation.title.ifBlank { "New Chat" },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (isActive) {
+                                MaterialTheme.colorScheme.onSecondaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.onSurface
+                            },
+                            maxLines = 1
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = modelShortLabel(conversation.modelId),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isActive) {
+                                MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            maxLines = 1
+                        )
                     }
                 }
             }
         }
     }
+}
 
-    if (showClearDialog) {
-        AlertDialog(
-            onDismissRequest = { showClearDialog = false },
-            title = { Text("Clear conversation?") },
-            text = { Text("This will delete all messages in the current chat.") },
-            confirmButton = {
-                TextButton(onClick = { viewModel.clearMessages(); showClearDialog = false }) {
-                    Text("Clear", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showClearDialog = false }) { Text("Cancel") }
+@Composable
+private fun ErrorBanner(
+    message: String,
+    onDismiss: () -> Unit
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.errorContainer,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = message,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer
+            )
+            TextButton(onClick = onDismiss) {
+                Text(
+                    text = "Dismiss",
+                    color = MaterialTheme.colorScheme.onErrorContainer
+                )
             }
+        }
+    }
+}
+
+@Composable
+private fun InputBar(
+    value: String,
+    onValueChange: (String) -> Unit,
+    onSend: () -> Unit,
+    enabled: Boolean
+) {
+    Surface(shadowElevation = 8.dp) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .imePadding()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.Bottom
+        ) {
+            OutlinedTextField(
+                value = value,
+                onValueChange = onValueChange,
+                modifier = Modifier.weight(1f),
+                enabled = enabled,
+                placeholder = { Text("Message Copilot...") },
+                shape = RoundedCornerShape(26.dp),
+                maxLines = 5,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                keyboardActions = KeyboardActions(onSend = { onSend() })
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            FilledIconButton(
+                onClick = onSend,
+                enabled = enabled && value.isNotBlank(),
+                modifier = Modifier.size(48.dp),
+                shape = CircleShape
+            ) {
+                Icon(Icons.Default.ArrowUpward, contentDescription = "Send")
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ModelPickerSheet(
+    currentModel: String,
+    onModelSelected: (String) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp)
+            .padding(bottom = 24.dp)
+    ) {
+        Text(
+            text = "Choose model",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
         )
+        CopilotApiClient.AVAILABLE_MODELS.forEach { (id, name) ->
+            ListItem(
+                headlineContent = { Text(name) },
+                trailingContent = {
+                    if (id == currentModel) {
+                        Icon(Icons.Default.Check, contentDescription = "Selected")
+                    }
+                },
+                modifier = Modifier.combinedClickable(
+                    onClick = { onModelSelected(id) },
+                    onLongClick = { onModelSelected(id) }
+                )
+            )
+        }
     }
 }
 
 @Composable
 private fun WelcomeScreen() {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(32.dp)
+        ) {
             Text("👾", fontSize = 64.sp)
-            Spacer(Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(16.dp))
             Text("Copilot AI", style = MaterialTheme.typography.headlineMedium)
-            Spacer(Modifier.height(8.dp))
-            Text("Powered by GitHub Copilot",
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Send a message to start",
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(4.dp))
-            Text("Send a message to start chatting",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -215,11 +412,13 @@ private fun MessageBubble(message: Message) {
 
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
+        verticalAlignment = Alignment.Top
     ) {
         if (!isUser) {
             Box(
                 modifier = Modifier
+                    .padding(top = 2.dp)
                     .size(28.dp)
                     .clip(CircleShape)
                     .background(MaterialTheme.colorScheme.primaryContainer),
@@ -227,23 +426,25 @@ private fun MessageBubble(message: Message) {
             ) {
                 Text("✦", fontSize = 14.sp)
             }
-            Spacer(Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(8.dp))
         }
 
         Column(
-            modifier = Modifier.widthIn(max = 300.dp),
+            modifier = Modifier.widthIn(max = 320.dp),
             horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
         ) {
             Surface(
                 shape = RoundedCornerShape(
-                    topStart = if (isUser) 18.dp else 4.dp,
-                    topEnd = if (isUser) 4.dp else 18.dp,
-                    bottomStart = 18.dp,
-                    bottomEnd = 18.dp
+                    topStart = if (isUser) 20.dp else 8.dp,
+                    topEnd = if (isUser) 8.dp else 20.dp,
+                    bottomStart = 20.dp,
+                    bottomEnd = 20.dp
                 ),
-                color = if (isUser) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.surfaceVariant,
-                tonalElevation = if (isUser) 0.dp else 1.dp,
+                color = if (isUser) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant
+                },
                 modifier = Modifier.combinedClickable(
                     onClick = {},
                     onLongClick = {
@@ -252,44 +453,54 @@ private fun MessageBubble(message: Message) {
                     }
                 )
             ) {
-                if (message.isLoading && message.content.isEmpty()) {
-                    TypingIndicator(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
+                if (message.isLoading && message.content.isBlank()) {
+                    TypingIndicator(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)
+                    )
                 } else {
                     Text(
                         text = message.content,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                         style = MaterialTheme.typography.bodyMedium,
-                        color = if (isUser) MaterialTheme.colorScheme.onPrimary
-                        else MaterialTheme.colorScheme.onSurfaceVariant
+                        color = if (isUser) {
+                            MaterialTheme.colorScheme.onPrimary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        }
                     )
                 }
             }
+
             if (copied) {
-                Text("Copied!", style = MaterialTheme.typography.labelSmall,
+                Text(
+                    text = "Copied!",
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
+                )
             }
         }
-
-        if (isUser) Spacer(Modifier.width(8.dp))
     }
 }
 
 @Composable
 private fun TypingIndicator(modifier: Modifier = Modifier) {
-    val dots = 3
-    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        repeat(dots) { index ->
-            val infiniteTransition = rememberInfiniteTransition(label = "dot$index")
-            val alpha by infiniteTransition.animateFloat(
+    val transition = rememberInfiniteTransition(label = "typing")
+
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        repeat(3) { index ->
+            val alpha by transition.animateFloat(
                 initialValue = 0.3f,
                 targetValue = 1f,
                 animationSpec = infiniteRepeatable(
-                    animation = tween(600, delayMillis = index * 150),
+                    animation = tween(durationMillis = 600, delayMillis = index * 150),
                     repeatMode = RepeatMode.Reverse
                 ),
-                label = "alpha$index"
+                label = "dot-$index"
             )
             Box(
                 modifier = Modifier
@@ -299,4 +510,12 @@ private fun TypingIndicator(modifier: Modifier = Modifier) {
             )
         }
     }
+}
+
+private fun modelShortLabel(modelId: String): String {
+    return CopilotApiClient.AVAILABLE_MODELS
+        .firstOrNull { it.first == modelId }
+        ?.second
+        ?.substringBefore(" (")
+        ?: modelId
 }

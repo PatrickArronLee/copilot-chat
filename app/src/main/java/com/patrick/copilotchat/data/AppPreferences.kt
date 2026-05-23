@@ -13,13 +13,26 @@ class AppPreferences(context: Context) {
         set(value) = prefs.edit().putString("github_token", value).apply()
 
     var selectedModel: String
-        get() = prefs.getString("selected_model", CopilotApiClient.DEFAULT_MODEL) ?: CopilotApiClient.DEFAULT_MODEL
+        get() {
+            val storedModel = prefs.getString("selected_model", CopilotApiClient.DEFAULT_MODEL)
+                ?: CopilotApiClient.DEFAULT_MODEL
+            val validModels = CopilotApiClient.AVAILABLE_MODELS.map { it.first }
+            return if (storedModel in validModels) {
+                storedModel
+            } else {
+                prefs.edit().putString("selected_model", CopilotApiClient.DEFAULT_MODEL).apply()
+                CopilotApiClient.DEFAULT_MODEL
+            }
+        }
         set(value) = prefs.edit().putString("selected_model", value).apply()
 
     var systemPrompt: String
-        get() = prefs.getString("system_prompt",
-            "You are a helpful AI assistant. Be concise and friendly.") ?: ""
+        get() = prefs.getString(
+            "system_prompt",
+            "You are a helpful AI assistant. Be concise and friendly."
+        ) ?: "You are a helpful AI assistant. Be concise and friendly."
         set(value) = prefs.edit().putString("system_prompt", value).apply()
 
-    val isConfigured: Boolean get() = githubToken.isNotBlank()
+    val isConfigured: Boolean
+        get() = githubToken.isNotBlank()
 }
