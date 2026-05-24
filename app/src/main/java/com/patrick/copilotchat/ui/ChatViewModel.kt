@@ -43,7 +43,7 @@ class ChatViewModel(
     private val _currentModel = MutableStateFlow(resolveModel(_activeConversation.value?.modelId ?: prefs.selectedModel))
     val currentModel: StateFlow<String> = _currentModel
 
-    /** True when the app is connected to and using the local bridge server. */
+    /** "⚡ Bridge" badge — shown when bridge is online (optional enhancement). */
     private val _bridgeActive = MutableStateFlow(false)
     val bridgeActive: StateFlow<Boolean> = _bridgeActive
 
@@ -57,7 +57,6 @@ class ChatViewModel(
         checkBridge()
     }
 
-    /** Ping the bridge server; update bridgeActive accordingly. */
     fun checkBridge() {
         viewModelScope.launch {
             _bridgeActive.value = api.isBridgeAvailable(prefs.bridgeUrl)
@@ -67,156 +66,64 @@ class ChatViewModel(
     fun sendMessage(text: String) {
         val userText = text.trim()
         if (userText.isBlank() || _isLoading.value) return
-
-        // Handle slash commands
-        if (userText.startsWith("/")) {
-            handleSlashCommand(userText)
-            return
-        }
-
-        if (!prefs.isConfigured && !_bridgeActive.value) {
-            _error.value = "Please add your GitHub token in Settings, or start the bridge server"
+        if (userText.startsWith("/")) { handleSlashCommand(userText); return }
+        if (!prefs.isConfigured) {
+            _error.value = "Please add your GitHub token in Settings"
             return
         }
 
         val baseConversation = _activeConversation.value ?: Conversation(modelId = _currentModel.value)
         val title = if (baseConversation.title == "New Chat" || baseConversation.title.isBlank()) {
             repository.generateTitle(userText)
-        } else {
-            baseConversation.title
-        }
+        } else baseConversation.title
+
         val userMessage = Message(role = MessageRole.USER, content = userText)
         val assistantId = UUID.randomUUID().toString()
         val loadingMessage = Message(id = assistantId, role = MessageRole.ASSISTANT, content = "", isLoading = true)
 
-        val persistedConversation = baseConversation.copy(
+        val persisted = baseConversation.copy(
             title = title,
             modelId = _currentModel.value,
             messages = baseConversation.messages + userMessage
         )
-        persistConversation(persistedConversation)
-        persistInMemory(persistedConversation.copy(messages = persistedConversation.messages + loadingMessage))
+        persistConversation(persisted)
+        persistInMemory(persisted.copy(messages = persisted.messages + loadingMessage))
 
         _error.value = null
         _isLoading.value = true
-
         currentRequestJob?.cancel()
-        streamingConversationId = persistedConversation.id
+        streamingConversationId = persisted.id
 
+        // Priority: bridge (if online) → embedded agentic loop (default)
         if (_bridgeActive.value) {
-            sendViaBridge(persistedConversation, assistantId)
+            sendViaBridge(persisted, assistantId)
         } else {
-            sendDirect(persistedConversation, assistantId)
+            sendViaEmbeddedLoop(persisted, assistantId)
         }
     }
 
-    private fun handleSlashCommand(command: String) {
-        val parts = command.removePrefix("/").split(" ", limit = 2)
-        val cmd = parts[0].lowercase()
-        val arg = parts.getOrNull(1)?.trim() ?: ""
+    // ─── Embedded agentic loop (built-in, no bridge needed) ──────────────────
 
-        val responseText = when (cmd) {
-            "help" -> buildString {
-                appendLine("**Available slash commands:**")
-                appendLine()
-                appendLine("• `/help` — show this help")
-                appendLine("• `/clear` — clear current conversation messages")
-                appendLine("• `/new` — start a new conversation")
-                appendLine("• `/model [id]` — switch model (e.g. `/model gpt-4o`)")
-                appendLine("• `/system [prompt]` — set system prompt")
-                appendLine("• `/bridge` — check bridge server status")
-                appendLine()
-                if (_bridgeActive.value) {
-                    appendLine("🟢 **Bridge active** — agent tools (bash, file ops) are enabled")
-                } else {
-                    appendLine("🔴 **Bridge offline** — direct API mode (no tools)")
-                    appendLine("Start with: `python3 ~/copilot-bridge/bridge.py`")
-                }
-            }
-            "clear" -> {
-                clearActiveMessages()
-                return
-            }
-            "new" -> {
-                newConversation()
-                return
-            }
-            "model" -> {
-                if (arg.isBlank()) {
-                    val models = supportedModels.joinToString("\n") { (id, label) ->
-                        val mark = if (id == _currentModel.value) "✓ " else "  "
-                        "$mark`$id` — $label"
-                    }
-                    "**Available models:**\n\n$models"
-                } else {
-                    val matched = supportedModels.firstOrNull { (id, _) -> id == arg }
-                    if (matched != null) {
-                        setModel(arg)
-                        "Switched to **${matched.second}**"
-                    } else {
-                        "Unknown model: `$arg`. Use `/model` to list available models."
-                    }
-                }
-            }
-            "system" -> {
-                if (arg.isBlank()) {
-                    "Current system prompt:\n\n> ${prefs.systemPrompt}"
-                } else {
-                    prefs.systemPrompt = arg
-                    "System prompt updated."
-                }
-            }
-            "bridge" -> {
-                viewModelScope.launch {
-                    val available = api.isBridgeAvailable(prefs.bridgeUrl)
-                    _bridgeActive.value = available
-                    val systemMsg = if (available) {
-                        "🟢 **Bridge is online** at ${prefs.bridgeUrl}\n\nAgent tools (bash, file ops) are enabled."
-                    } else {
-                        "🔴 **Bridge is offline.**\n\nStart it in UserLAnd:\n```\npython3 ~/copilot-bridge/bridge.py\n```"
-                    }
-                    addSystemMessage(systemMsg)
-                }
-                return
-            }
-            else -> "Unknown command: `/$cmd`. Type `/help` for available commands."
-        }
-
-        addSystemMessage(responseText)
-    }
-
-    private fun addSystemMessage(content: String) {
-        val conversation = _activeConversation.value ?: Conversation(modelId = _currentModel.value)
-        val systemMessage = Message(role = MessageRole.ASSISTANT, content = content)
-        persistConversation(conversation.copy(messages = conversation.messages + systemMessage))
-    }
-
-    private fun sendViaBridge(conversation: Conversation, assistantId: String) {
+    private fun sendViaEmbeddedLoop(conversation: Conversation, assistantId: String) {
         currentRequestJob = viewModelScope.launch {
             val history = conversation.messages.map { msg ->
                 (if (msg.role == MessageRole.USER) "user" else "assistant") to msg.content
             }
-
             var fullText = ""
             val toolEvents = mutableListOf<ToolEvent>()
             var failed = false
 
-            api.streamBridge(
-                bridgeUrl = prefs.bridgeUrl,
+            api.streamAgenticLoop(
+                token = prefs.githubToken,
                 model = _currentModel.value,
                 systemPrompt = prefs.systemPrompt,
-                messages = history,
-                fallbackToken = prefs.githubToken
+                messages = history
             ).catch { throwable ->
                 if (throwable is CancellationException) throw throwable
                 failed = true
-                // If bridge goes down during request, fall back to direct API
-                if (throwable.message?.contains("Bridge error") == false) {
-                    _bridgeActive.value = false
-                }
-                val errorMessage = throwable.message ?: "Unknown error"
-                _error.value = errorMessage
-                finalizeMessage(conversation, assistantId, "Error: $errorMessage", emptyList())
+                val msg = throwable.message ?: "Unknown error"
+                _error.value = msg
+                finalizeMessage(conversation, assistantId, "Error: $msg", emptyList())
                 _isLoading.value = false
                 streamingConversationId = null
             }.collect { event ->
@@ -240,7 +147,7 @@ class ChatViewModel(
                         _isLoading.value = false
                         streamingConversationId = null
                     }
-                    StreamEvent.Done -> { /* handled below after collect */ }
+                    StreamEvent.Done -> { /* handled below */ }
                 }
             }
 
@@ -252,82 +159,142 @@ class ChatViewModel(
         }
     }
 
-    private fun sendDirect(conversation: Conversation, assistantId: String) {
+    // ─── Bridge passthrough (optional) ───────────────────────────────────────
+
+    private fun sendViaBridge(conversation: Conversation, assistantId: String) {
         currentRequestJob = viewModelScope.launch {
             val history = conversation.messages.map { msg ->
                 (if (msg.role == MessageRole.USER) "user" else "assistant") to msg.content
             }
-
-            var fullResponse = ""
+            var fullText = ""
+            val toolEvents = mutableListOf<ToolEvent>()
             var failed = false
 
-            api.streamMessage(
-                token = prefs.githubToken,
+            api.streamBridge(
+                bridgeUrl = prefs.bridgeUrl,
                 model = _currentModel.value,
                 systemPrompt = prefs.systemPrompt,
-                messages = history
+                messages = history,
+                fallbackToken = prefs.githubToken
             ).catch { throwable ->
                 if (throwable is CancellationException) throw throwable
                 failed = true
-                val errorMessage = throwable.message ?: "Unknown error"
-                _error.value = errorMessage
-                finalizeMessage(conversation, assistantId, "Error: $errorMessage", emptyList())
-                _isLoading.value = false
-                streamingConversationId = null
-            }.collect { chunk ->
-                fullResponse += chunk
-                updateLoadingMessage(conversation, assistantId, fullResponse, emptyList())
+                // Bridge went down — fall back to embedded loop
+                _bridgeActive.value = false
+                sendViaEmbeddedLoop(conversation, assistantId)
+            }.collect { event ->
+                when (event) {
+                    is StreamEvent.TextChunk -> {
+                        fullText += event.text
+                        updateLoadingMessage(conversation, assistantId, fullText, toolEvents)
+                    }
+                    is StreamEvent.ToolCall -> {
+                        toolEvents.add(ToolEvent("call", event.name, event.args))
+                        updateLoadingMessage(conversation, assistantId, fullText, toolEvents)
+                    }
+                    is StreamEvent.ToolResult -> {
+                        toolEvents.add(ToolEvent("result", event.name, event.output, event.isError))
+                        updateLoadingMessage(conversation, assistantId, fullText, toolEvents)
+                    }
+                    is StreamEvent.Error -> {
+                        failed = true
+                        _error.value = event.message
+                        finalizeMessage(conversation, assistantId, "Error: ${event.message}", toolEvents)
+                        _isLoading.value = false
+                        streamingConversationId = null
+                    }
+                    StreamEvent.Done -> { /* handled below */ }
+                }
             }
 
             if (!failed) {
-                finalizeMessage(conversation, assistantId, fullResponse, emptyList())
+                finalizeMessage(conversation, assistantId, fullText, toolEvents)
                 _isLoading.value = false
                 streamingConversationId = null
             }
         }
     }
 
-    private fun updateLoadingMessage(
-        base: Conversation,
-        assistantId: String,
-        content: String,
-        toolEvents: List<ToolEvent>
-    ) {
-        persistInMemory(
-            base.copy(
-                messages = base.messages + Message(
-                    id = assistantId,
-                    role = MessageRole.ASSISTANT,
-                    content = content,
-                    isLoading = false,
-                    toolEvents = toolEvents.toList()
-                )
-            )
-        )
+    // ─── Slash commands ───────────────────────────────────────────────────────
+
+    private fun handleSlashCommand(command: String) {
+        val parts = command.removePrefix("/").split(" ", limit = 2)
+        val cmd = parts[0].lowercase()
+        val arg = parts.getOrNull(1)?.trim() ?: ""
+
+        val responseText = when (cmd) {
+            "help" -> buildString {
+                appendLine("**Available slash commands:**")
+                appendLine()
+                appendLine("• `/help` — show this help")
+                appendLine("• `/clear` — clear current conversation")
+                appendLine("• `/new` — start a new conversation")
+                appendLine("• `/model [id]` — switch model (e.g. `/model gpt-4o`)")
+                appendLine("• `/system [prompt]` — set system prompt")
+                appendLine("• `/bridge` — check optional bridge server status")
+                appendLine()
+                appendLine("🟢 **Embedded tools always active** — bash, read_file, write_file, list_files")
+                if (_bridgeActive.value) appendLine("⚡ **Bridge also connected** (UserLAnd environment)")
+            }
+            "clear" -> { clearActiveMessages(); return }
+            "new"   -> { newConversation(); return }
+            "model" -> {
+                if (arg.isBlank()) {
+                    val models = supportedModels.joinToString("\n") { (id, label) ->
+                        val mark = if (id == _currentModel.value) "✓ " else "  "
+                        "$mark`$id` — $label"
+                    }
+                    "**Available models:**\n\n$models"
+                } else {
+                    val matched = supportedModels.firstOrNull { (id, _) -> id == arg }
+                    if (matched != null) { setModel(arg); "Switched to **${matched.second}**" }
+                    else "Unknown model: `$arg`. Use `/model` to list available models."
+                }
+            }
+            "system" -> {
+                if (arg.isBlank()) "Current system prompt:\n\n> ${prefs.systemPrompt}"
+                else { prefs.systemPrompt = arg; "System prompt updated." }
+            }
+            "bridge" -> {
+                viewModelScope.launch {
+                    val available = api.isBridgeAvailable(prefs.bridgeUrl)
+                    _bridgeActive.value = available
+                    addSystemMessage(if (available)
+                        "⚡ **Bridge online** at ${prefs.bridgeUrl}\n\nRequests will route through bridge (UserLAnd environment)."
+                    else
+                        "🔴 **Bridge offline** — using embedded tools (Termux environment).\n\nTo start: `python3 ~/bridge.py --token TOKEN`"
+                    )
+                }
+                return
+            }
+            else -> "Unknown command: `/$cmd`. Type `/help` for available commands."
+        }
+        addSystemMessage(responseText)
     }
 
-    private fun finalizeMessage(
-        base: Conversation,
-        assistantId: String,
-        content: String,
-        toolEvents: List<ToolEvent>
-    ) {
-        persistConversation(
-            base.copy(
-                messages = base.messages + Message(
-                    id = assistantId,
-                    role = MessageRole.ASSISTANT,
-                    content = content,
-                    toolEvents = toolEvents.toList()
-                )
-            ),
-            activate = _activeConversation.value?.id == base.id
-        )
+    private fun addSystemMessage(content: String) {
+        val conversation = _activeConversation.value ?: Conversation(modelId = _currentModel.value)
+        persistConversation(conversation.copy(messages = conversation.messages + Message(role = MessageRole.ASSISTANT, content = content)))
+    }
+
+    // ─── Helpers ──────────────────────────────────────────────────────────────
+
+    private fun updateLoadingMessage(base: Conversation, assistantId: String, content: String, toolEvents: List<ToolEvent>) {
+        persistInMemory(base.copy(messages = base.messages + Message(
+            id = assistantId, role = MessageRole.ASSISTANT, content = content,
+            isLoading = false, toolEvents = toolEvents.toList()
+        )))
+    }
+
+    private fun finalizeMessage(base: Conversation, assistantId: String, content: String, toolEvents: List<ToolEvent>) {
+        persistConversation(base.copy(messages = base.messages + Message(
+            id = assistantId, role = MessageRole.ASSISTANT, content = content,
+            toolEvents = toolEvents.toList()
+        )), activate = _activeConversation.value?.id == base.id)
     }
 
     fun newConversation() {
-        val conversation = Conversation(modelId = _currentModel.value)
-        persistConversation(conversation)
+        persistConversation(Conversation(modelId = _currentModel.value))
         _error.value = null
     }
 
@@ -344,17 +311,10 @@ class ChatViewModel(
         repository.delete(id)
         val updated = _conversations.value.filterNot { it.id == id }.sortedByDescending { it.createdAt }
         _conversations.value = updated
-
         if (_activeConversation.value?.id == id) {
-            val nextConversation = updated.firstOrNull()
-            if (nextConversation != null) {
-                prefs.selectedModel = nextConversation.modelId
-                setActiveConversation(nextConversation)
-            } else {
-                _activeConversation.value = null
-                _messages.value = emptyList()
-                _currentModel.value = prefs.selectedModel
-            }
+            val next = updated.firstOrNull()
+            if (next != null) { prefs.selectedModel = next.modelId; setActiveConversation(next) }
+            else { _activeConversation.value = null; _messages.value = emptyList(); _currentModel.value = prefs.selectedModel }
         }
     }
 
@@ -372,67 +332,44 @@ class ChatViewModel(
         }
     }
 
-    fun dismissError() {
-        _error.value = null
-    }
+    fun dismissError() { _error.value = null }
 
     fun regenerateLastResponse() {
         if (_isLoading.value) return
         val msgs = _messages.value
         val lastAssistantIdx = msgs.indexOfLast { it.role == MessageRole.ASSISTANT }
         if (lastAssistantIdx < 0) return
-        msgs.take(lastAssistantIdx).lastOrNull { it.role == MessageRole.USER } ?: return
         val conversation = _activeConversation.value ?: return
-        val trimmedMessages = msgs.take(lastAssistantIdx)
-        val trimmedConversation = conversation.copy(messages = trimmedMessages)
-        persistConversation(trimmedConversation)
-
+        val trimmed = conversation.copy(messages = msgs.take(lastAssistantIdx))
+        persistConversation(trimmed)
         _error.value = null
         _isLoading.value = true
         val assistantId = UUID.randomUUID().toString()
-        persistInMemory(trimmedConversation.copy(
-            messages = trimmedConversation.messages + Message(
-                id = assistantId, role = MessageRole.ASSISTANT, content = "", isLoading = true
-            )
-        ))
-
+        persistInMemory(trimmed.copy(messages = trimmed.messages + Message(id = assistantId, role = MessageRole.ASSISTANT, content = "", isLoading = true)))
         currentRequestJob?.cancel()
-        streamingConversationId = trimmedConversation.id
-
-        if (_bridgeActive.value) {
-            sendViaBridge(trimmedConversation, assistantId)
-        } else {
-            sendDirect(trimmedConversation, assistantId)
-        }
+        streamingConversationId = trimmed.id
+        if (_bridgeActive.value) sendViaBridge(trimmed, assistantId) else sendViaEmbeddedLoop(trimmed, assistantId)
     }
 
     fun getShareText(): String {
         val conv = _activeConversation.value ?: return ""
-        val sb = StringBuilder()
-        sb.appendLine("# ${conv.title}")
-        sb.appendLine("Model: ${conv.modelId}")
-        sb.appendLine()
-        _messages.value.forEach { msg ->
-            val role = if (msg.role == MessageRole.USER) "You" else "Copilot"
-            sb.appendLine("**$role:**")
-            sb.appendLine(msg.content)
-            sb.appendLine()
+        return buildString {
+            appendLine("# ${conv.title}")
+            appendLine("Model: ${conv.modelId}")
+            appendLine()
+            _messages.value.forEach { msg ->
+                appendLine("**${if (msg.role == MessageRole.USER) "You" else "Copilot"}:**")
+                appendLine(msg.content)
+                appendLine()
+            }
         }
-        return sb.toString()
     }
 
     private fun persistInMemory(conversation: Conversation) {
-        val storedConversation = conversation.copy(
-            messages = conversation.messages.map { it.copy(isLoading = false) }
-        )
-        _conversations.value = _conversations.value
-            .filterNot { it.id == conversation.id }
-            .plus(storedConversation)
-            .sortedByDescending { it.createdAt }
-
-        if (_activeConversation.value?.id == conversation.id) {
-            setActiveConversation(conversation)
-        }
+        val stored = conversation.copy(messages = conversation.messages.map { it.copy(isLoading = false) })
+        _conversations.value = _conversations.value.filterNot { it.id == conversation.id }
+            .plus(stored).sortedByDescending { it.createdAt }
+        if (_activeConversation.value?.id == conversation.id) setActiveConversation(conversation)
     }
 
     private fun setActiveConversation(conversation: Conversation) {
