@@ -153,6 +153,14 @@ class CopilotApiClient {
             val response = client.newCall(request).execute()
             if (!response.isSuccessful) {
                 val errBody = response.body?.string() ?: "Unknown error"
+                // On first call, if tools caused a 400, fall back to plain streaming
+                if (response.code == 400 && iteration == 0) {
+                    streamMessage(token, model, systemPrompt, messages).collect { text ->
+                        emit(StreamEvent.TextChunk(text))
+                    }
+                    emit(StreamEvent.Done)
+                    return@flow
+                }
                 emit(StreamEvent.Error("API error ${response.code}: $errBody"))
                 return@flow
             }

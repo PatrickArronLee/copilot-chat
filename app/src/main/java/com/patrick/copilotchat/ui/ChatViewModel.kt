@@ -94,11 +94,12 @@ class ChatViewModel(
         currentRequestJob?.cancel()
         streamingConversationId = persisted.id
 
-        // Priority: bridge (if online) → embedded agentic loop (default)
+        // Priority: bridge (if online) → direct streaming (default, reliable)
+        // Agentic loop (tools) is used via bridge or explicit /tools command
         if (_bridgeActive.value) {
             sendViaBridge(persisted, assistantId)
         } else {
-            sendViaEmbeddedLoop(persisted, assistantId)
+            sendDirect(persisted, assistantId)
         }
     }
 
@@ -159,6 +160,42 @@ class ChatViewModel(
         }
     }
 
+    // ─── Direct streaming (default, no tools) ────────────────────────────────
+
+    private fun sendDirect(conversation: Conversation, assistantId: String) {
+        currentRequestJob = viewModelScope.launch {
+            val history = conversation.messages.map { msg ->
+                (if (msg.role == MessageRole.USER) "user" else "assistant") to msg.content
+            }
+            var fullText = ""
+            var failed = false
+
+            api.streamMessage(
+                token = prefs.githubToken,
+                model = _currentModel.value,
+                systemPrompt = prefs.systemPrompt,
+                messages = history
+            ).catch { throwable ->
+                if (throwable is CancellationException) throw throwable
+                failed = true
+                val msg = throwable.message ?: "Unknown error"
+                _error.value = msg
+                finalizeMessage(conversation, assistantId, "Error: $msg", emptyList())
+                _isLoading.value = false
+                streamingConversationId = null
+            }.collect { chunk ->
+                fullText += chunk
+                updateLoadingMessage(conversation, assistantId, fullText, emptyList())
+            }
+
+            if (!failed) {
+                finalizeMessage(conversation, assistantId, fullText, emptyList())
+                _isLoading.value = false
+                streamingConversationId = null
+            }
+        }
+    }
+
     // ─── Bridge passthrough (optional) ───────────────────────────────────────
 
     private fun sendViaBridge(conversation: Conversation, assistantId: String) {
@@ -181,7 +218,7 @@ class ChatViewModel(
                 failed = true
                 // Bridge went down — fall back to embedded loop
                 _bridgeActive.value = false
-                sendViaEmbeddedLoop(conversation, assistantId)
+                sendDirect(conversation, assistantId)
             }.collect { event ->
                 when (event) {
                     is StreamEvent.TextChunk -> {
@@ -233,8 +270,8 @@ class ChatViewModel(
                 appendLine("• `/system [prompt]` — set system prompt")
                 appendLine("• `/bridge` — check optional bridge server status")
                 appendLine()
-                appendLine("🟢 **Embedded tools always active** — bash, read_file, write_file, list_files")
-                if (_bridgeActive.value) appendLine("⚡ **Bridge also connected** (UserLAnd environment)")
+                if (_bridgeActive.value) appendLine("⚡ **Bridge connected** — agentic tools active (UserLAnd)")
+                else appendLine("💬 **Direct mode** — plain streaming chat")
             }
             "clear" -> { clearActiveMessages(); return }
             "new"   -> { newConversation(); return }
@@ -348,7 +385,7 @@ class ChatViewModel(
         persistInMemory(trimmed.copy(messages = trimmed.messages + Message(id = assistantId, role = MessageRole.ASSISTANT, content = "", isLoading = true)))
         currentRequestJob?.cancel()
         streamingConversationId = trimmed.id
-        if (_bridgeActive.value) sendViaBridge(trimmed, assistantId) else sendViaEmbeddedLoop(trimmed, assistantId)
+        if (_bridgeActive.value) sendViaBridge(trimmed, assistantId) else sendDirect(trimmed, assistantId)
     }
 
     fun getShareText(): String {
