@@ -162,7 +162,14 @@ class CopilotApiClient {
             val finishReason = choice.optString("finish_reason", "stop")
             val message = choice.getJSONObject("message")
 
-            apiMessages.put(message)
+            // Sanitize: null content causes 400 on follow-up requests.
+            // Keep only role, content (as "" if null), and tool_calls.
+            val sanitizedMsg = JSONObject().apply {
+                put("role", message.optString("role", "assistant"))
+                put("content", if (message.isNull("content")) "" else message.optString("content", ""))
+                message.optJSONArray("tool_calls")?.let { put("tool_calls", it) }
+            }
+            apiMessages.put(sanitizedMsg)
 
             if (finishReason == "tool_calls") {
                 val toolCalls = message.optJSONArray("tool_calls") ?: JSONArray()
