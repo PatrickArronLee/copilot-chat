@@ -270,7 +270,7 @@ class ChatViewModel(
                 appendLine("• `/bridge` — check optional bridge server status")
                 appendLine()
                 if (_bridgeActive.value) appendLine("⚡ **Bridge connected** — agentic tools active (UserLAnd)")
-                else appendLine("💬 **Direct mode** — plain streaming chat")
+                else appendLine("🛠️ **Embedded tools active** — bash, read/write/list files (Termux)")
             }
             "clear" -> { clearActiveMessages(); return }
             "new"   -> { newConversation(); return }

@@ -153,8 +153,9 @@ class CopilotApiClient {
             val response = client.newCall(request).execute()
             if (!response.isSuccessful) {
                 val errBody = response.body?.string() ?: "Unknown error"
-                // On first call 400, fall back to plain streaming (tools not supported)
+                // On first call 400, fall back to plain streaming (tools not supported by token)
                 if (response.code == 400 && iteration == 0) {
+                    emit(StreamEvent.TextChunk("⚠️ *Tool calling not available with this token — using plain chat.*\n\n"))
                     streamMessage(token, model, systemPrompt, messages).collect { emit(StreamEvent.TextChunk(it)) }
                     emit(StreamEvent.Done)
                     return@flow
