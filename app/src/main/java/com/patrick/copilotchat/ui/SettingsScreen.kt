@@ -116,7 +116,7 @@ fun SettingsScreen(
                         viewModel.checkBridge()
                         if (available) {
                             // Refresh model list via bridge
-                            val models = api.fetchModelsViaBridge(bridgeUrl)
+                            val models = api.fetchAvailableModels(prefs.githubToken.takeIf { it.isNotBlank() } ?: "")
                             if (models != null) {
                                 prefs.tokenModelIds = models
                                 displayModels = prefs.supportedModels
