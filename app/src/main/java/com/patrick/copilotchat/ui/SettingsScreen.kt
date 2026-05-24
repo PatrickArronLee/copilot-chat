@@ -18,6 +18,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.patrick.copilotchat.api.CopilotApiClient
 import com.patrick.copilotchat.data.AppPreferences
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -25,12 +26,16 @@ fun SettingsScreen(
     prefs: AppPreferences,
     onBack: () -> Unit
 ) {
+    val scope = rememberCoroutineScope()
+    val api = remember { CopilotApiClient() }
+
     var token by remember { mutableStateOf(prefs.githubToken) }
     var selectedModel by remember { mutableStateOf(prefs.selectedModel) }
     var systemPrompt by remember { mutableStateOf(prefs.systemPrompt) }
     var showToken by remember { mutableStateOf(false) }
     var showModelDropdown by remember { mutableStateOf(false) }
-    var saved by remember { mutableStateOf(false) }
+    var saveStatus by remember { mutableStateOf("") } // "", "saving", "saved", "error"
+    var displayModels by remember { mutableStateOf(prefs.supportedModels) }
 
     Scaffold(
         topBar = {
@@ -62,7 +67,7 @@ fun SettingsScreen(
                 color = MaterialTheme.colorScheme.primary)
             OutlinedTextField(
                 value = token,
-                onValueChange = { token = it },
+                onValueChange = { token = it; saveStatus = "" },
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("GitHub Copilot Token") },
                 placeholder = { Text("gho_... or ghp_...") },
@@ -76,7 +81,7 @@ fun SettingsScreen(
                     }
                 },
                 supportingText = {
-                    Text("Use your existing Copilot token (gho_) or a PAT from github.com/settings/tokens")
+                    Text("Your Copilot token — see instructions below")
                 }
             )
 
@@ -91,7 +96,7 @@ fun SettingsScreen(
                 onExpandedChange = { showModelDropdown = it }
             ) {
                 OutlinedTextField(
-                    value = CopilotApiClient.AVAILABLE_MODELS.find { it.first == selectedModel }?.second ?: selectedModel,
+                    value = displayModels.find { it.first == selectedModel }?.second ?: selectedModel,
                     onValueChange = {},
                     readOnly = true,
                     label = { Text("Model") },
@@ -102,7 +107,7 @@ fun SettingsScreen(
                     expanded = showModelDropdown,
                     onDismissRequest = { showModelDropdown = false }
                 ) {
-                    CopilotApiClient.AVAILABLE_MODELS.forEach { (id, name) ->
+                    displayModels.forEach { (id, name) ->
                         DropdownMenuItem(
                             text = { Text(name) },
                             onClick = { selectedModel = id; showModelDropdown = false }
@@ -129,14 +134,45 @@ fun SettingsScreen(
 
             Button(
                 onClick = {
+                    saveStatus = "saving"
                     prefs.githubToken = token
-                    prefs.selectedModel = selectedModel
                     prefs.systemPrompt = systemPrompt
-                    saved = true
+                    scope.launch {
+                        val models = api.fetchAvailableModels(token.trim())
+                        if (models != null) {
+                            prefs.tokenModelIds = models
+                            displayModels = prefs.supportedModels
+                            // If current selection not in new model list, pick the best available
+                            if (displayModels.none { it.first == selectedModel }) {
+                                selectedModel = displayModels.firstOrNull()?.first ?: "gpt-4o"
+                            }
+                        }
+                        prefs.selectedModel = selectedModel
+                        saveStatus = if (models != null) "saved" else "error"
+                    }
                 },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                enabled = saveStatus != "saving"
             ) {
-                Text(if (saved) "Saved ✓" else "Save Settings")
+                Text(when (saveStatus) {
+                    "saving" -> "Checking token…"
+                    "saved"  -> "Saved ✓ (${displayModels.size} models available)"
+                    "error"  -> "Saved (couldn't fetch models)"
+                    else     -> "Save Settings"
+                })
+            }
+
+            if (saveStatus == "error") {
+                Card(colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer
+                )) {
+                    Text(
+                        "Could not verify token or fetch model list. Check your token and internet connection.",
+                        modifier = Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                }
             }
 
             if (!token.startsWith("gh")) {
@@ -146,12 +182,12 @@ fun SettingsScreen(
                     Column(modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text("Where to find your token", style = MaterialTheme.typography.labelMedium)
-                        Text("Option 1 — Copilot CLI token (easiest):", style = MaterialTheme.typography.bodySmall,
+                        Text("In your terminal, run:", style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onTertiaryContainer)
-                        Text("  Run: cat ~/.copilot/config.json", style = MaterialTheme.typography.bodySmall)
-                        Text("  Copy the gho_... value", style = MaterialTheme.typography.bodySmall)
+                        Text("  cat ~/.config/github-copilot/hosts.json", style = MaterialTheme.typography.bodySmall)
+                        Text("  Copy the gho_... value from \"copilotTokens\"", style = MaterialTheme.typography.bodySmall)
                         Spacer(Modifier.height(4.dp))
-                        Text("Option 2 — New PAT:", style = MaterialTheme.typography.bodySmall,
+                        Text("Or create a new PAT:", style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onTertiaryContainer)
                         Text("  github.com/settings/tokens → Generate new token (classic) → repo scope", style = MaterialTheme.typography.bodySmall)
                     }

@@ -303,6 +303,7 @@ fun ChatScreen(
         ) {
             ModelPickerSheet(
                 currentModel = currentModel,
+                models = viewModel.supportedModels,
                 onModelSelected = { modelId ->
                     viewModel.setModel(modelId)
                     showModelPicker = false
@@ -549,6 +550,7 @@ private fun InputBar(
 @Composable
 private fun ModelPickerSheet(
     currentModel: String,
+    models: List<Pair<String, String>>,
     onModelSelected: (String) -> Unit
 ) {
     Column(
@@ -562,7 +564,7 @@ private fun ModelPickerSheet(
             style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
         )
-        CopilotApiClient.AVAILABLE_MODELS.forEach { (id, name) ->
+        models.forEach { (id, name) ->
             ListItem(
                 headlineContent = { Text(name) },
                 trailingContent = {

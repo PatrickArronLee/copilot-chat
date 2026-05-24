@@ -4,6 +4,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -88,6 +89,30 @@ class CopilotApiClient {
             }
         }
     }.flowOn(Dispatchers.IO)
+
+    /** Fetches the list of model IDs actually available for [token] from the Copilot API.
+     *  Returns null on network/auth error. */
+    suspend fun fetchAvailableModels(token: String): List<String>? = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder()
+                .url("https://api.githubcopilot.com/models")
+                .get()
+                .header("Authorization", "Bearer ${token.trim()}")
+                .header("Editor-Version", "vscode/1.85.0")
+                .header("Copilot-Integration-Id", "vscode-chat")
+                .build()
+            val response = client.newCall(request).execute()
+            if (!response.isSuccessful) return@withContext null
+            val body = response.body?.string() ?: return@withContext null
+            val data = JSONObject(body).getJSONArray("data")
+            val ids = mutableListOf<String>()
+            for (i in 0 until data.length()) {
+                val id = data.getJSONObject(i).optString("id")
+                if (id.isNotBlank()) ids.add(id)
+            }
+            ids
+        } catch (_: Exception) { null }
+    }
 
     companion object {
         val AVAILABLE_MODELS = listOf(
