@@ -55,6 +55,10 @@ class AppPreferences(context: Context) {
         get() = prefs.getString("bridge_url", "http://localhost:8765") ?: "http://localhost:8765"
         set(value) = prefs.edit().putString("bridge_url", value.trimEnd('/')).apply()
 
+    var toolsEnabled: Boolean
+        get() = prefs.getBoolean("tools_enabled", true)
+        set(value) = prefs.edit().putBoolean("tools_enabled", value).apply()
+
     val isConfigured: Boolean
         get() = githubToken.isNotBlank()
 }

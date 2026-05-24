@@ -94,11 +94,13 @@ class ChatViewModel(
         currentRequestJob?.cancel()
         streamingConversationId = persisted.id
 
-        // Priority: bridge (if online) → embedded agentic loop (streaming + tools, falls back to plain chat on 400)
+        // Priority: bridge → agentic loop (if tools enabled) → plain chat
         if (_bridgeActive.value) {
             sendViaBridge(persisted, assistantId)
-        } else {
+        } else if (prefs.toolsEnabled) {
             sendViaEmbeddedLoop(persisted, assistantId)
+        } else {
+            sendDirect(persisted, assistantId)
         }
     }
 
@@ -217,7 +219,8 @@ class ChatViewModel(
                 failed = true
                 // Bridge went down — fall back to embedded loop
                 _bridgeActive.value = false
-                sendViaEmbeddedLoop(conversation, assistantId)
+                if (prefs.toolsEnabled) sendViaEmbeddedLoop(conversation, assistantId)
+                else sendDirect(conversation, assistantId)
             }.collect { event ->
                 when (event) {
                     is StreamEvent.TextChunk -> {
@@ -268,6 +271,7 @@ class ChatViewModel(
                 appendLine("• `/model [id]` — switch model (e.g. `/model gpt-4o`)")
                 appendLine("• `/system [prompt]` — set system prompt")
                 appendLine("• `/bridge` — check optional bridge server status")
+                appendLine("• `/debug` — test embedded tool execution")
                 appendLine()
                 if (_bridgeActive.value) appendLine("⚡ **Bridge connected** — agentic tools active (UserLAnd)")
                 else appendLine("🛠️ **Embedded tools active** — bash, read/write/list files (Termux)")
@@ -300,6 +304,17 @@ class ChatViewModel(
                     else
                         "🔴 **Bridge offline** — using embedded tools (Termux environment).\n\nTo start: `python3 ~/bridge.py --token TOKEN`"
                     )
+                }
+                return
+            }
+            "debug" -> {
+                viewModelScope.launch {
+                    addSystemMessage("🔧 Testing tool execution...")
+                    val conversation = _activeConversation.value ?: Conversation(modelId = _currentModel.value)
+                    val assistantId = UUID.randomUUID().toString()
+                    _isLoading.value = true
+                    persistInMemory(conversation.copy(messages = conversation.messages + Message(id = assistantId, role = MessageRole.ASSISTANT, content = "", isLoading = true)))
+                    sendViaEmbeddedLoop(conversation.copy(messages = conversation.messages + Message(role = MessageRole.USER, content = "Run this bash command and report the output: echo 'tools_ok' && uname -a && id")), assistantId)
                 }
                 return
             }
@@ -384,7 +399,9 @@ class ChatViewModel(
         persistInMemory(trimmed.copy(messages = trimmed.messages + Message(id = assistantId, role = MessageRole.ASSISTANT, content = "", isLoading = true)))
         currentRequestJob?.cancel()
         streamingConversationId = trimmed.id
-        if (_bridgeActive.value) sendViaBridge(trimmed, assistantId) else sendViaEmbeddedLoop(trimmed, assistantId)
+        if (_bridgeActive.value) sendViaBridge(trimmed, assistantId)
+        else if (prefs.toolsEnabled) sendViaEmbeddedLoop(trimmed, assistantId)
+        else sendDirect(trimmed, assistantId)
     }
 
     fun getShareText(): String {

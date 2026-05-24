@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -33,6 +34,7 @@ fun SettingsScreen(
     var selectedModel by remember { mutableStateOf(prefs.selectedModel) }
     var systemPrompt by remember { mutableStateOf(prefs.systemPrompt) }
     var bridgeUrl by remember { mutableStateOf(prefs.bridgeUrl) }
+    var toolsEnabled by remember { mutableStateOf(prefs.toolsEnabled) }
     var showToken by remember { mutableStateOf(false) }
     var showModelDropdown by remember { mutableStateOf(false) }
     var saveStatus by remember { mutableStateOf("") }
@@ -49,6 +51,7 @@ fun SettingsScreen(
                         prefs.selectedModel = selectedModel
                         prefs.systemPrompt = systemPrompt
                         prefs.bridgeUrl = bridgeUrl
+                        prefs.toolsEnabled = toolsEnabled
                         onBack()
                     }) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
@@ -133,6 +136,36 @@ fun SettingsScreen(
                 Text(if (bridgeStatus == "checking") "Checking…" else "Test Bridge Connection")
             }
 
+            // ─── Tools section ───────────────────────────────────────────────────
+            HorizontalDivider()
+            Text(
+                "Tools",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Enable tool calling", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "bash, file ops, HTTP (requires compatible token)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = toolsEnabled,
+                    onCheckedChange = {
+                        toolsEnabled = it
+                        prefs.toolsEnabled = it
+                    }
+                )
+            }
+
             HorizontalDivider()
 
             // ── Token (fallback when bridge offline) ─────────────────────
@@ -194,8 +227,34 @@ fun SettingsScreen(
             HorizontalDivider()
 
             // ── System Prompt ─────────────────────────────────────────────
-            Text("System Prompt", style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary)
+            val systemPromptPresets = listOf(
+                "Default" to "You are a helpful AI assistant. Be concise and friendly.",
+                "Coding" to "You are an expert software engineer. Give concise, correct code. Prefer showing code over explaining it.",
+                "Concise" to "Answer in 1-3 sentences maximum. Be direct.",
+                "Android/Termux" to "You are an AI assistant running on Android via Termux. You have bash access. Be concise and technical."
+            )
+            var showPresets by remember { mutableStateOf(false) }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("System Prompt", style = MaterialTheme.typography.titleSmall)
+                TextButton(onClick = { showPresets = !showPresets }) {
+                    Text(if (showPresets) "Hide presets" else "Presets ▼")
+                }
+            }
+            if (showPresets) {
+                systemPromptPresets.forEach { (label, prompt) ->
+                    TextButton(
+                        onClick = { systemPrompt = prompt; showPresets = false },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(label, modifier = Modifier.fillMaxWidth())
+                    }
+                }
+            }
             OutlinedTextField(
                 value = systemPrompt,
                 onValueChange = { systemPrompt = it },

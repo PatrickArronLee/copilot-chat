@@ -75,11 +75,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -705,7 +708,7 @@ private fun MessageBubble(
         ) {
             // Tool call cards (shown before the final text response)
             if (!isUser && message.toolEvents.isNotEmpty()) {
-                ToolEventsCard(toolEvents = message.toolEvents)
+                ToolEventsCard(toolEvents = message.toolEvents, isLoading = message.isLoading)
                 Spacer(modifier = Modifier.height(4.dp))
             }
 
@@ -807,42 +810,67 @@ private fun TypingIndicator(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun ToolEventsCard(toolEvents: List<ToolEvent>) {
-    var expanded by remember { mutableStateOf(false) }
+private fun ToolEventsCard(toolEvents: List<ToolEvent>, isLoading: Boolean = false) {
+    // A tool is "running" if the last event is a "call" (no result yet)
+    val isRunning = isLoading && toolEvents.lastOrNull()?.type == "call"
 
-    // Group tool calls with their results
+    // Auto-expand while running, remember user preference otherwise
+    var userExpanded by remember { mutableStateOf(false) }
+    val expanded = isRunning || userExpanded
+
     val callEvents = toolEvents.filter { it.type == "call" }
+    val hasError = toolEvents.any { it.isError }
+
+    val infiniteTransition = rememberInfiniteTransition(label = "tool-pulse")
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.4f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(600), repeatMode = RepeatMode.Reverse
+        ), label = "pulse"
+    )
 
     Surface(
         shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f),
+        color = when {
+            hasError -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
+            isRunning -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+            else -> MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f)
+        },
         modifier = Modifier
             .fillMaxWidth(0.9f)
-            .clickable { expanded = !expanded }
+            .clickable { userExpanded = !userExpanded }
     ) {
         Column(modifier = Modifier.padding(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = if (toolEvents.any { it.isError }) "⚠ " else "⚡ ",
-                    fontSize = 12.sp
+                    text = when {
+                        isRunning -> "⚙ "
+                        hasError -> "⚠ "
+                        else -> "⚡ "
+                    },
+                    fontSize = 12.sp,
+                    modifier = if (isRunning) Modifier.alpha(pulseAlpha) else Modifier
                 )
                 Text(
-                    text = if (callEvents.size == 1)
-                        "Used tool: ${callEvents[0].name}"
-                    else
-                        "Used ${callEvents.size} tools: ${callEvents.joinToString(", ") { it.name }}",
+                    text = when {
+                        isRunning -> "Running: ${callEvents.lastOrNull()?.name ?: "tool"}…"
+                        callEvents.size == 1 -> "Used tool: ${callEvents[0].name}"
+                        else -> "Used ${callEvents.size} tools: ${callEvents.joinToString(", ") { it.name }}"
+                    },
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                    color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f)
                 )
-                Text(
-                    text = if (expanded) "▲" else "▼",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onTertiaryContainer
-                )
+                if (!isRunning) {
+                    Text(
+                        text = if (expanded) "▲" else "▼",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
-            if (expanded) {
+            if (expanded && toolEvents.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(6.dp))
                 toolEvents.forEach { event ->
                     when (event.type) {
@@ -850,10 +878,11 @@ private fun ToolEventsCard(toolEvents: List<ToolEvent>) {
                             Text(
                                 text = "▶ ${event.name}",
                                 style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.padding(top = 4.dp)
                             )
-                            if (event.detail != "{}") {
+                            if (event.detail.isNotBlank()) {
                                 Surface(
                                     shape = RoundedCornerShape(6.dp),
                                     color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
@@ -861,7 +890,7 @@ private fun ToolEventsCard(toolEvents: List<ToolEvent>) {
                                 ) {
                                     Text(
                                         text = event.detail,
-                                        style = MaterialTheme.typography.labelSmall,
+                                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
                                         modifier = Modifier.padding(6.dp),
                                         color = MaterialTheme.colorScheme.onSurface
                                     )
@@ -870,24 +899,26 @@ private fun ToolEventsCard(toolEvents: List<ToolEvent>) {
                         }
                         "result" -> {
                             Text(
-                                text = "← ${event.name}${if (event.isError) " (error)" else ""}",
+                                text = if (event.isError) "✗ error" else "✓ result",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = if (event.isError) MaterialTheme.colorScheme.error
-                                        else MaterialTheme.colorScheme.onTertiaryContainer,
+                                        else MaterialTheme.colorScheme.tertiary,
                                 modifier = Modifier.padding(top = 2.dp)
                             )
-                            val preview = event.detail.take(200) + if (event.detail.length > 200) "…" else ""
+                            val preview = event.detail.take(300).trimEnd() + if (event.detail.length > 300) "\n…" else ""
                             Surface(
                                 shape = RoundedCornerShape(6.dp),
-                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                                color = if (event.isError)
+                                    MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f)
+                                else
+                                    MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text(
                                     text = preview,
-                                    style = MaterialTheme.typography.labelSmall,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
                                     modifier = Modifier.padding(6.dp),
-                                    color = if (event.isError) MaterialTheme.colorScheme.error
-                                            else MaterialTheme.colorScheme.onSurface
+                                    color = MaterialTheme.colorScheme.onSurface
                                 )
                             }
                         }

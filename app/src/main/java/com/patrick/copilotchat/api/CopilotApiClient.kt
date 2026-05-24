@@ -39,6 +39,9 @@ class CopilotApiClient {
         put(JSONObject("""{"type":"function","function":{"name":"read_file","description":"Read the full contents of a file.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Absolute or ~ path to read"}},"required":["path"]}}}"""))
         put(JSONObject("""{"type":"function","function":{"name":"write_file","description":"Write content to a file, creating parent dirs if needed.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}}}"""))
         put(JSONObject("""{"type":"function","function":{"name":"list_files","description":"List files and directories at a path.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Directory path to list"}},"required":["path"]}}}"""))
+        put(JSONObject("""{"type":"function","function":{"name":"search_files","description":"Search for a pattern in files using grep. Returns matching lines with filenames.","parameters":{"type":"object","properties":{"pattern":{"type":"string","description":"The grep pattern to search for"},"path":{"type":"string","description":"Directory or file to search in (default: current directory)"}},"required":["pattern"]}}}"""))
+        put(JSONObject("""{"type":"function","function":{"name":"append_file","description":"Append content to the end of a file, creating it if it doesn't exist.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}}}"""))
+        put(JSONObject("""{"type":"function","function":{"name":"http_get","description":"Make an HTTP GET request and return the response body (max 2000 chars).","parameters":{"type":"object","properties":{"url":{"type":"string","description":"The URL to fetch"}},"required":["url"]}}}"""))
     }
 
     // ─── Local tool execution ─────────────────────────────────────────────────
@@ -79,6 +82,31 @@ class CopilotApiClient {
                         ?: "(empty)"
                     Pair(entries, false)
                 }
+                "search_files" -> {
+                    val pattern = args.optString("pattern", "")
+                    val searchPath = expandPath(args.optString("path", "."))
+                    val process = ProcessBuilder(findShell(), "-c", "grep -r -n --include='*' '${pattern.replace("'", "'\\''")}' '$searchPath' 2>&1 | head -50")
+                        .redirectErrorStream(true)
+                        .start()
+                    val output = process.inputStream.bufferedReader().readText().trim()
+                    process.waitFor()
+                    Pair(output.ifBlank { "(no matches)" }, false)
+                }
+                "append_file" -> {
+                    val path = expandPath(args.optString("path", ""))
+                    val content = args.optString("content", "")
+                    File(path).also { it.parentFile?.mkdirs() }.appendText(content)
+                    Pair("Appended ${content.length} chars to $path", false)
+                }
+                "http_get" -> {
+                    val url = args.optString("url", "")
+                    val process = ProcessBuilder(findShell(), "-c", "curl -s --max-time 10 '${url.replace("'", "'\\''")}' 2>&1 | head -c 2000")
+                        .redirectErrorStream(true)
+                        .start()
+                    val output = process.inputStream.bufferedReader().readText().trim()
+                    process.waitFor()
+                    Pair(output.ifBlank { "(empty response)" }, false)
+                }
                 else -> Pair("Unknown tool: $name", true)
             }
         } catch (e: Exception) {
@@ -102,6 +130,24 @@ class CopilotApiClient {
             return home + path.substring(1)
         }
         return path
+    }
+
+    private fun formatToolArgs(name: String, argsJson: String): String {
+        return try {
+            val a = JSONObject(argsJson)
+            when (name) {
+                "bash" -> a.optString("command", argsJson)
+                "read_file", "list_files" -> a.optString("path", argsJson)
+                "write_file", "append_file" -> a.optString("path", argsJson)
+                "search_files" -> {
+                    val p = a.optString("pattern", "")
+                    val path = a.optString("path", ".")
+                    if (path == ".") p else "$p in $path"
+                }
+                "http_get" -> a.optString("url", argsJson)
+                else -> argsJson
+            }
+        } catch (_: Exception) { argsJson }
     }
 
     // ─── Embedded agentic loop (no bridge needed) ─────────────────────────────
@@ -229,7 +275,7 @@ class CopilotApiClient {
 
                 // Execute each tool and add results
                 toolAccs.entries.sortedBy { it.key }.forEach { (_, acc) ->
-                    emit(StreamEvent.ToolCall(id = acc.id, name = acc.name, args = acc.args.toString()))
+                    emit(StreamEvent.ToolCall(id = acc.id, name = acc.name, args = formatToolArgs(acc.name, acc.args.toString())))
                     val (output, isError) = executeToolLocally(acc.name, acc.args.toString())
                     emit(StreamEvent.ToolResult(name = acc.name, output = output, isError = isError))
                     apiMessages.put(JSONObject().apply {
