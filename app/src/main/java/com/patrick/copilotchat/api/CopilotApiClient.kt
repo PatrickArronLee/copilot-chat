@@ -106,7 +106,13 @@ class CopilotApiClient {
 
     // ─── Embedded agentic loop (no bridge needed) ─────────────────────────────
 
-    /** Full agentic loop running entirely inside the APK. Emits StreamEvents. */
+    // ─── Embedded agentic loop using STREAMING endpoint ──────────────────────
+    // Uses stream:true (same as plain chat, known to work) and accumulates
+    // tool_call delta fragments before executing locally.
+
+    private data class ToolCallAcc(var id: String = "", var name: String = "", val args: StringBuilder = StringBuilder())
+
+    /** Agentic loop via streaming endpoint. Falls back to plain chat on any error. */
     fun streamAgenticLoop(
         token: String,
         model: String,
@@ -115,23 +121,17 @@ class CopilotApiClient {
     ): Flow<StreamEvent> = flow {
         val apiMessages = JSONArray()
         if (systemPrompt.isNotBlank() && !isReasoningModel(model)) {
-            apiMessages.put(JSONObject().apply {
-                put("role", "system")
-                put("content", systemPrompt)
-            })
+            apiMessages.put(JSONObject().apply { put("role", "system"); put("content", systemPrompt) })
         }
         messages.forEach { (role, content) ->
-            apiMessages.put(JSONObject().apply {
-                put("role", role)
-                put("content", content)
-            })
+            apiMessages.put(JSONObject().apply { put("role", role); put("content", content) })
         }
 
         for (iteration in 0 until 10) {
             val payload = JSONObject().apply {
                 put("model", model)
                 put("messages", apiMessages)
-                put("stream", false)
+                put("stream", true)
                 if (isReasoningModel(model)) {
                     put("max_completion_tokens", 4096)
                 } else {
@@ -153,11 +153,9 @@ class CopilotApiClient {
             val response = client.newCall(request).execute()
             if (!response.isSuccessful) {
                 val errBody = response.body?.string() ?: "Unknown error"
-                // On first call, if tools caused a 400, fall back to plain streaming
+                // On first call 400, fall back to plain streaming (tools not supported)
                 if (response.code == 400 && iteration == 0) {
-                    streamMessage(token, model, systemPrompt, messages).collect { text ->
-                        emit(StreamEvent.TextChunk(text))
-                    }
+                    streamMessage(token, model, systemPrompt, messages).collect { emit(StreamEvent.TextChunk(it)) }
                     emit(StreamEvent.Done)
                     return@flow
                 }
@@ -165,44 +163,82 @@ class CopilotApiClient {
                 return@flow
             }
 
-            val body = JSONObject(response.body!!.string())
-            val choice = body.getJSONArray("choices").getJSONObject(0)
-            val finishReason = choice.optString("finish_reason", "stop")
-            val message = choice.getJSONObject("message")
+            // Accumulate stream: text chunks + tool_call fragments
+            val toolAccs = mutableMapOf<Int, ToolCallAcc>()
+            val assistantText = StringBuilder()
+            var finishReason = "stop"
 
-            // Sanitize: null content causes 400 on follow-up requests.
-            // Keep only role, content (as "" if null), and tool_calls.
-            val sanitizedMsg = JSONObject().apply {
-                put("role", message.optString("role", "assistant"))
-                put("content", if (message.isNull("content")) "" else message.optString("content", ""))
-                message.optJSONArray("tool_calls")?.let { put("tool_calls", it) }
+            response.body?.source()?.let { source ->
+                while (!source.exhausted()) {
+                    val line = source.readUtf8Line() ?: break
+                    if (!line.startsWith("data: ")) continue
+                    val data = line.removePrefix("data: ").trim()
+                    if (data == "[DONE]") break
+                    val obj = try { JSONObject(data) } catch (_: Exception) { continue }
+                    val choices = obj.optJSONArray("choices") ?: continue
+                    if (choices.length() == 0) continue
+                    val choice = choices.getJSONObject(0)
+                    val fr = choice.optString("finish_reason", "")
+                    if (fr.isNotEmpty()) finishReason = fr
+                    val delta = choice.optJSONObject("delta") ?: continue
+
+                    // Text content
+                    if (!delta.isNull("content")) {
+                        val text = delta.optString("content", "")
+                        if (text.isNotEmpty()) {
+                            assistantText.append(text)
+                            emit(StreamEvent.TextChunk(text))
+                        }
+                    }
+
+                    // Tool call fragments
+                    val tcDeltas = delta.optJSONArray("tool_calls")
+                    if (tcDeltas != null) {
+                        for (i in 0 until tcDeltas.length()) {
+                            val tc = tcDeltas.getJSONObject(i)
+                            val idx = tc.optInt("index", 0)
+                            val acc = toolAccs.getOrPut(idx) { ToolCallAcc() }
+                            if (tc.has("id")) acc.id = tc.optString("id")
+                            val fn = tc.optJSONObject("function") ?: continue
+                            if (fn.has("name")) acc.name = fn.optString("name", "")
+                            acc.args.append(fn.optString("arguments", ""))
+                        }
+                    }
+                }
             }
-            apiMessages.put(sanitizedMsg)
 
-            if (finishReason == "tool_calls") {
-                val toolCalls = message.optJSONArray("tool_calls") ?: JSONArray()
-                for (i in 0 until toolCalls.length()) {
-                    val tc = toolCalls.getJSONObject(i)
-                    val fn = tc.getJSONObject("function")
-                    val toolName = fn.optString("name", "")
-                    val toolArgs = fn.optString("arguments", "{}")
-                    val toolId = tc.optString("id", "")
+            if (finishReason == "tool_calls" && toolAccs.isNotEmpty()) {
+                // Rebuild assistant message with tool_calls for history
+                val tcArray = JSONArray()
+                toolAccs.entries.sortedBy { it.key }.forEach { (_, acc) ->
+                    tcArray.put(JSONObject().apply {
+                        put("id", acc.id)
+                        put("type", "function")
+                        put("function", JSONObject().apply {
+                            put("name", acc.name)
+                            put("arguments", acc.args.toString())
+                        })
+                    })
+                }
+                apiMessages.put(JSONObject().apply {
+                    put("role", "assistant")
+                    put("content", if (assistantText.isEmpty()) "" else assistantText.toString())
+                    put("tool_calls", tcArray)
+                })
 
-                    emit(StreamEvent.ToolCall(id = toolId, name = toolName, args = toolArgs))
-
-                    val (output, isError) = executeToolLocally(toolName, toolArgs)
-
-                    emit(StreamEvent.ToolResult(name = toolName, output = output, isError = isError))
-
+                // Execute each tool and add results
+                toolAccs.entries.sortedBy { it.key }.forEach { (_, acc) ->
+                    emit(StreamEvent.ToolCall(id = acc.id, name = acc.name, args = acc.args.toString()))
+                    val (output, isError) = executeToolLocally(acc.name, acc.args.toString())
+                    emit(StreamEvent.ToolResult(name = acc.name, output = output, isError = isError))
                     apiMessages.put(JSONObject().apply {
                         put("role", "tool")
-                        put("tool_call_id", toolId)
+                        put("tool_call_id", acc.id)
                         put("content", output)
                     })
                 }
+                // Continue loop with tool results
             } else {
-                val content = message.optString("content", "")
-                if (content.isNotEmpty()) emit(StreamEvent.TextChunk(content))
                 emit(StreamEvent.Done)
                 return@flow
             }

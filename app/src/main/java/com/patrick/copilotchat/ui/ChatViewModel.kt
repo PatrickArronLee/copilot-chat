@@ -94,12 +94,11 @@ class ChatViewModel(
         currentRequestJob?.cancel()
         streamingConversationId = persisted.id
 
-        // Priority: bridge (if online) → direct streaming (default, reliable)
-        // Agentic loop (tools) is used via bridge or explicit /tools command
+        // Priority: bridge (if online) → embedded agentic loop (streaming + tools, falls back to plain chat on 400)
         if (_bridgeActive.value) {
             sendViaBridge(persisted, assistantId)
         } else {
-            sendDirect(persisted, assistantId)
+            sendViaEmbeddedLoop(persisted, assistantId)
         }
     }
 
@@ -218,7 +217,7 @@ class ChatViewModel(
                 failed = true
                 // Bridge went down — fall back to embedded loop
                 _bridgeActive.value = false
-                sendDirect(conversation, assistantId)
+                sendViaEmbeddedLoop(conversation, assistantId)
             }.collect { event ->
                 when (event) {
                     is StreamEvent.TextChunk -> {
@@ -385,7 +384,7 @@ class ChatViewModel(
         persistInMemory(trimmed.copy(messages = trimmed.messages + Message(id = assistantId, role = MessageRole.ASSISTANT, content = "", isLoading = true)))
         currentRequestJob?.cancel()
         streamingConversationId = trimmed.id
-        if (_bridgeActive.value) sendViaBridge(trimmed, assistantId) else sendDirect(trimmed, assistantId)
+        if (_bridgeActive.value) sendViaBridge(trimmed, assistantId) else sendViaEmbeddedLoop(trimmed, assistantId)
     }
 
     fun getShareText(): String {
