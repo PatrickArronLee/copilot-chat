@@ -3,11 +3,13 @@ package com.patrick.copilotchat.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.patrick.copilotchat.api.CopilotApiClient
+import com.patrick.copilotchat.api.StreamEvent
 import com.patrick.copilotchat.data.AppPreferences
 import com.patrick.copilotchat.data.Conversation
 import com.patrick.copilotchat.data.ConversationRepository
 import com.patrick.copilotchat.data.Message
 import com.patrick.copilotchat.data.MessageRole
+import com.patrick.copilotchat.data.ToolEvent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -41,17 +43,39 @@ class ChatViewModel(
     private val _currentModel = MutableStateFlow(resolveModel(_activeConversation.value?.modelId ?: prefs.selectedModel))
     val currentModel: StateFlow<String> = _currentModel
 
+    /** True when the app is connected to and using the local bridge server. */
+    private val _bridgeActive = MutableStateFlow(false)
+    val bridgeActive: StateFlow<Boolean> = _bridgeActive
+
     val supportedModels: List<Pair<String, String>>
         get() = prefs.supportedModels
 
     private var currentRequestJob: Job? = null
     private var streamingConversationId: String? = null
 
+    init {
+        checkBridge()
+    }
+
+    /** Ping the bridge server; update bridgeActive accordingly. */
+    fun checkBridge() {
+        viewModelScope.launch {
+            _bridgeActive.value = api.isBridgeAvailable(prefs.bridgeUrl)
+        }
+    }
+
     fun sendMessage(text: String) {
         val userText = text.trim()
         if (userText.isBlank() || _isLoading.value) return
-        if (!prefs.isConfigured) {
-            _error.value = "Please add your GitHub token in Settings"
+
+        // Handle slash commands
+        if (userText.startsWith("/")) {
+            handleSlashCommand(userText)
+            return
+        }
+
+        if (!prefs.isConfigured && !_bridgeActive.value) {
+            _error.value = "Please add your GitHub token in Settings, or start the bridge server"
             return
         }
 
@@ -63,12 +87,7 @@ class ChatViewModel(
         }
         val userMessage = Message(role = MessageRole.USER, content = userText)
         val assistantId = UUID.randomUUID().toString()
-        val loadingMessage = Message(
-            id = assistantId,
-            role = MessageRole.ASSISTANT,
-            content = "",
-            isLoading = true
-        )
+        val loadingMessage = Message(id = assistantId, role = MessageRole.ASSISTANT, content = "", isLoading = true)
 
         val persistedConversation = baseConversation.copy(
             title = title,
@@ -83,9 +102,160 @@ class ChatViewModel(
 
         currentRequestJob?.cancel()
         streamingConversationId = persistedConversation.id
+
+        if (_bridgeActive.value) {
+            sendViaBridge(persistedConversation, assistantId)
+        } else {
+            sendDirect(persistedConversation, assistantId)
+        }
+    }
+
+    private fun handleSlashCommand(command: String) {
+        val parts = command.removePrefix("/").split(" ", limit = 2)
+        val cmd = parts[0].lowercase()
+        val arg = parts.getOrNull(1)?.trim() ?: ""
+
+        val responseText = when (cmd) {
+            "help" -> buildString {
+                appendLine("**Available slash commands:**")
+                appendLine()
+                appendLine("• `/help` — show this help")
+                appendLine("• `/clear` — clear current conversation messages")
+                appendLine("• `/new` — start a new conversation")
+                appendLine("• `/model [id]` — switch model (e.g. `/model gpt-4o`)")
+                appendLine("• `/system [prompt]` — set system prompt")
+                appendLine("• `/bridge` — check bridge server status")
+                appendLine()
+                if (_bridgeActive.value) {
+                    appendLine("🟢 **Bridge active** — agent tools (bash, file ops) are enabled")
+                } else {
+                    appendLine("🔴 **Bridge offline** — direct API mode (no tools)")
+                    appendLine("Start with: `python3 ~/copilot-bridge/bridge.py`")
+                }
+            }
+            "clear" -> {
+                clearActiveMessages()
+                return
+            }
+            "new" -> {
+                newConversation()
+                return
+            }
+            "model" -> {
+                if (arg.isBlank()) {
+                    val models = supportedModels.joinToString("\n") { (id, label) ->
+                        val mark = if (id == _currentModel.value) "✓ " else "  "
+                        "$mark`$id` — $label"
+                    }
+                    "**Available models:**\n\n$models"
+                } else {
+                    val matched = supportedModels.firstOrNull { (id, _) -> id == arg }
+                    if (matched != null) {
+                        setModel(arg)
+                        "Switched to **${matched.second}**"
+                    } else {
+                        "Unknown model: `$arg`. Use `/model` to list available models."
+                    }
+                }
+            }
+            "system" -> {
+                if (arg.isBlank()) {
+                    "Current system prompt:\n\n> ${prefs.systemPrompt}"
+                } else {
+                    prefs.systemPrompt = arg
+                    "System prompt updated."
+                }
+            }
+            "bridge" -> {
+                viewModelScope.launch {
+                    val available = api.isBridgeAvailable(prefs.bridgeUrl)
+                    _bridgeActive.value = available
+                    val systemMsg = if (available) {
+                        "🟢 **Bridge is online** at ${prefs.bridgeUrl}\n\nAgent tools (bash, file ops) are enabled."
+                    } else {
+                        "🔴 **Bridge is offline.**\n\nStart it in UserLAnd:\n```\npython3 ~/copilot-bridge/bridge.py\n```"
+                    }
+                    addSystemMessage(systemMsg)
+                }
+                return
+            }
+            else -> "Unknown command: `/$cmd`. Type `/help` for available commands."
+        }
+
+        addSystemMessage(responseText)
+    }
+
+    private fun addSystemMessage(content: String) {
+        val conversation = _activeConversation.value ?: Conversation(modelId = _currentModel.value)
+        val systemMessage = Message(role = MessageRole.ASSISTANT, content = content)
+        persistConversation(conversation.copy(messages = conversation.messages + systemMessage))
+    }
+
+    private fun sendViaBridge(conversation: Conversation, assistantId: String) {
         currentRequestJob = viewModelScope.launch {
-            val history = persistedConversation.messages.map { message ->
-                (if (message.role == MessageRole.USER) "user" else "assistant") to message.content
+            val history = conversation.messages.map { msg ->
+                (if (msg.role == MessageRole.USER) "user" else "assistant") to msg.content
+            }
+
+            var fullText = ""
+            val toolEvents = mutableListOf<ToolEvent>()
+            var failed = false
+
+            api.streamBridge(
+                bridgeUrl = prefs.bridgeUrl,
+                model = _currentModel.value,
+                systemPrompt = prefs.systemPrompt,
+                messages = history,
+                fallbackToken = prefs.githubToken
+            ).catch { throwable ->
+                if (throwable is CancellationException) throw throwable
+                failed = true
+                // If bridge goes down during request, fall back to direct API
+                if (throwable.message?.contains("Bridge error") == false) {
+                    _bridgeActive.value = false
+                }
+                val errorMessage = throwable.message ?: "Unknown error"
+                _error.value = errorMessage
+                finalizeMessage(conversation, assistantId, "Error: $errorMessage", emptyList())
+                _isLoading.value = false
+                streamingConversationId = null
+            }.collect { event ->
+                when (event) {
+                    is StreamEvent.TextChunk -> {
+                        fullText += event.text
+                        updateLoadingMessage(conversation, assistantId, fullText, toolEvents)
+                    }
+                    is StreamEvent.ToolCall -> {
+                        toolEvents.add(ToolEvent("call", event.name, event.args))
+                        updateLoadingMessage(conversation, assistantId, fullText, toolEvents)
+                    }
+                    is StreamEvent.ToolResult -> {
+                        toolEvents.add(ToolEvent("result", event.name, event.output, event.isError))
+                        updateLoadingMessage(conversation, assistantId, fullText, toolEvents)
+                    }
+                    is StreamEvent.Error -> {
+                        failed = true
+                        _error.value = event.message
+                        finalizeMessage(conversation, assistantId, "Error: ${event.message}", toolEvents)
+                        _isLoading.value = false
+                        streamingConversationId = null
+                    }
+                    StreamEvent.Done -> { /* handled below after collect */ }
+                }
+            }
+
+            if (!failed) {
+                finalizeMessage(conversation, assistantId, fullText, toolEvents)
+                _isLoading.value = false
+                streamingConversationId = null
+            }
+        }
+    }
+
+    private fun sendDirect(conversation: Conversation, assistantId: String) {
+        currentRequestJob = viewModelScope.launch {
+            val history = conversation.messages.map { msg ->
+                (if (msg.role == MessageRole.USER) "user" else "assistant") to msg.content
             }
 
             var fullResponse = ""
@@ -101,47 +271,58 @@ class ChatViewModel(
                 failed = true
                 val errorMessage = throwable.message ?: "Unknown error"
                 _error.value = errorMessage
-                persistConversation(
-                    persistedConversation.copy(
-                        messages = persistedConversation.messages + Message(
-                            id = assistantId,
-                            role = MessageRole.ASSISTANT,
-                            content = "Error: $errorMessage"
-                        )
-                    ),
-                    activate = _activeConversation.value?.id == persistedConversation.id
-                )
+                finalizeMessage(conversation, assistantId, "Error: $errorMessage", emptyList())
                 _isLoading.value = false
                 streamingConversationId = null
             }.collect { chunk ->
                 fullResponse += chunk
-                persistInMemory(
-                    persistedConversation.copy(
-                        messages = persistedConversation.messages + Message(
-                            id = assistantId,
-                            role = MessageRole.ASSISTANT,
-                            content = fullResponse,
-                            isLoading = false
-                        )
-                    )
-                )
+                updateLoadingMessage(conversation, assistantId, fullResponse, emptyList())
             }
 
             if (!failed) {
-                persistConversation(
-                    persistedConversation.copy(
-                        messages = persistedConversation.messages + Message(
-                            id = assistantId,
-                            role = MessageRole.ASSISTANT,
-                            content = fullResponse
-                        )
-                    ),
-                    activate = _activeConversation.value?.id == persistedConversation.id
-                )
+                finalizeMessage(conversation, assistantId, fullResponse, emptyList())
                 _isLoading.value = false
                 streamingConversationId = null
             }
         }
+    }
+
+    private fun updateLoadingMessage(
+        base: Conversation,
+        assistantId: String,
+        content: String,
+        toolEvents: List<ToolEvent>
+    ) {
+        persistInMemory(
+            base.copy(
+                messages = base.messages + Message(
+                    id = assistantId,
+                    role = MessageRole.ASSISTANT,
+                    content = content,
+                    isLoading = false,
+                    toolEvents = toolEvents.toList()
+                )
+            )
+        )
+    }
+
+    private fun finalizeMessage(
+        base: Conversation,
+        assistantId: String,
+        content: String,
+        toolEvents: List<ToolEvent>
+    ) {
+        persistConversation(
+            base.copy(
+                messages = base.messages + Message(
+                    id = assistantId,
+                    role = MessageRole.ASSISTANT,
+                    content = content,
+                    toolEvents = toolEvents.toList()
+                )
+            ),
+            activate = _activeConversation.value?.id == base.id
+        )
     }
 
     fun newConversation() {
@@ -159,10 +340,7 @@ class ChatViewModel(
     }
 
     fun deleteConversation(id: String) {
-        if (streamingConversationId == id) {
-            cancelStreaming()
-        }
-
+        if (streamingConversationId == id) cancelStreaming()
         repository.delete(id)
         val updated = _conversations.value.filterNot { it.id == id }.sortedByDescending { it.createdAt }
         _conversations.value = updated
@@ -184,17 +362,12 @@ class ChatViewModel(
         if (prefs.supportedModels.none { it.first == modelId }) return
         prefs.selectedModel = modelId
         _currentModel.value = modelId
-
-        _activeConversation.value?.let { conversation ->
-            persistConversation(conversation.copy(modelId = modelId))
-        }
+        _activeConversation.value?.let { persistConversation(it.copy(modelId = modelId)) }
     }
 
     fun clearActiveMessages() {
         _activeConversation.value?.let { conversation ->
-            if (streamingConversationId == conversation.id) {
-                cancelStreaming()
-            }
+            if (streamingConversationId == conversation.id) cancelStreaming()
             persistConversation(conversation.copy(title = "New Chat", messages = emptyList()))
         }
     }
@@ -217,74 +390,19 @@ class ChatViewModel(
         _error.value = null
         _isLoading.value = true
         val assistantId = UUID.randomUUID().toString()
-        val loadingMessage = Message(
-            id = assistantId,
-            role = MessageRole.ASSISTANT,
-            content = "",
-            isLoading = true
-        )
-        persistInMemory(trimmedConversation.copy(messages = trimmedConversation.messages + loadingMessage))
+        persistInMemory(trimmedConversation.copy(
+            messages = trimmedConversation.messages + Message(
+                id = assistantId, role = MessageRole.ASSISTANT, content = "", isLoading = true
+            )
+        ))
 
         currentRequestJob?.cancel()
         streamingConversationId = trimmedConversation.id
-        currentRequestJob = viewModelScope.launch {
-            val history = trimmedConversation.messages.map { message ->
-                (if (message.role == MessageRole.USER) "user" else "assistant") to message.content
-            }
 
-            var fullResponse = ""
-            var failed = false
-
-            api.streamMessage(
-                token = prefs.githubToken,
-                model = _currentModel.value,
-                systemPrompt = prefs.systemPrompt,
-                messages = history
-            ).catch { throwable ->
-                if (throwable is CancellationException) throw throwable
-                failed = true
-                val errorMessage = throwable.message ?: "Unknown error"
-                _error.value = errorMessage
-                persistConversation(
-                    trimmedConversation.copy(
-                        messages = trimmedConversation.messages + Message(
-                            id = assistantId,
-                            role = MessageRole.ASSISTANT,
-                            content = "Error: $errorMessage"
-                        )
-                    ),
-                    activate = _activeConversation.value?.id == trimmedConversation.id
-                )
-                _isLoading.value = false
-                streamingConversationId = null
-            }.collect { chunk ->
-                fullResponse += chunk
-                persistInMemory(
-                    trimmedConversation.copy(
-                        messages = trimmedConversation.messages + Message(
-                            id = assistantId,
-                            role = MessageRole.ASSISTANT,
-                            content = fullResponse,
-                            isLoading = false
-                        )
-                    )
-                )
-            }
-
-            if (!failed) {
-                persistConversation(
-                    trimmedConversation.copy(
-                        messages = trimmedConversation.messages + Message(
-                            id = assistantId,
-                            role = MessageRole.ASSISTANT,
-                            content = fullResponse
-                        )
-                    ),
-                    activate = _activeConversation.value?.id == trimmedConversation.id
-                )
-                _isLoading.value = false
-                streamingConversationId = null
-            }
+        if (_bridgeActive.value) {
+            sendViaBridge(trimmedConversation, assistantId)
+        } else {
+            sendDirect(trimmedConversation, assistantId)
         }
     }
 
@@ -327,9 +445,7 @@ class ChatViewModel(
         val persisted = conversation.copy(messages = conversation.messages.map { it.copy(isLoading = false) })
         repository.save(persisted)
         persistInMemory(persisted)
-        if (activate) {
-            setActiveConversation(persisted)
-        }
+        if (activate) setActiveConversation(persisted)
     }
 
     fun cancelStreaming() {
@@ -339,7 +455,6 @@ class ChatViewModel(
         _isLoading.value = false
     }
 
-    /** Validates a model ID; falls back to first supported model or DEFAULT_MODEL. */
     private fun resolveModel(modelId: String): String {
         val valid = prefs.supportedModels.map { it.first }
         return if (modelId in valid) modelId else (valid.firstOrNull() ?: CopilotApiClient.DEFAULT_MODEL)

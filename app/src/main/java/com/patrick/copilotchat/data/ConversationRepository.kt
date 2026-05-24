@@ -94,11 +94,24 @@ class ConversationRepository(context: Context) {
             return null
         }
 
+        val toolEventsArray = json.optJSONArray("toolEvents") ?: JSONArray()
+        val toolEvents = mutableListOf<ToolEvent>()
+        for (i in 0 until toolEventsArray.length()) {
+            val te = toolEventsArray.optJSONObject(i) ?: continue
+            toolEvents.add(ToolEvent(
+                type = te.optString("type", "call"),
+                name = te.optString("name", ""),
+                detail = te.optString("detail", ""),
+                isError = te.optBoolean("isError", false)
+            ))
+        }
+
         return Message(
             id = id,
             role = role,
             content = json.optString("content"),
-            isLoading = false
+            isLoading = false,
+            toolEvents = toolEvents
         )
     }
 
@@ -117,5 +130,15 @@ class ConversationRepository(context: Context) {
         put("role", role.name)
         put("content", content)
         put("isLoading", false)
+        put("toolEvents", JSONArray().apply {
+            toolEvents.forEach { te ->
+                put(JSONObject().apply {
+                    put("type", te.type)
+                    put("name", te.name)
+                    put("detail", te.detail)
+                    put("isError", te.isError)
+                })
+            }
+        })
     }
 }

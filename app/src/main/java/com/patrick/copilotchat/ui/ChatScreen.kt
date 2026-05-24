@@ -87,6 +87,7 @@ import com.patrick.copilotchat.api.CopilotApiClient
 import com.patrick.copilotchat.data.Conversation
 import com.patrick.copilotchat.data.Message
 import com.patrick.copilotchat.data.MessageRole
+import com.patrick.copilotchat.data.ToolEvent
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -102,6 +103,7 @@ fun ChatScreen(
     val isLoading by viewModel.isLoading.collectAsState()
     val error by viewModel.error.collectAsState()
     val currentModel by viewModel.currentModel.collectAsState()
+    val bridgeActive by viewModel.bridgeActive.collectAsState()
 
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
@@ -209,7 +211,27 @@ fun ChatScreen(
                     },
                     title = {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("Copilot AI", style = MaterialTheme.typography.titleMedium)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("Copilot AI", style = MaterialTheme.typography.titleMedium)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (bridgeActive)
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                                    else
+                                        MaterialTheme.colorScheme.surfaceVariant
+                                ) {
+                                    Text(
+                                        text = if (bridgeActive) "⚡ Bridge" else "Direct",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (bridgeActive)
+                                            MaterialTheme.colorScheme.primary
+                                        else
+                                            MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
                             TextButton(
                                 onClick = { showModelPicker = true },
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
@@ -488,58 +510,101 @@ private fun InputBar(
     onVoiceInput: () -> Unit,
     isLoading: Boolean
 ) {
-    Surface(shadowElevation = 8.dp) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .imePadding()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.Bottom
-        ) {
-            FilledIconButton(
-                onClick = onVoiceInput,
-                enabled = !isLoading,
-                modifier = Modifier.size(48.dp),
-                shape = CircleShape
-            ) {
-                Icon(Icons.Default.Mic, contentDescription = "Voice input")
-            }
-            Spacer(modifier = Modifier.width(8.dp))
-            androidx.compose.material3.OutlinedTextField(
-                value = value,
-                onValueChange = onValueChange,
-                modifier = Modifier.weight(1f),
-                enabled = !isLoading,
-                placeholder = { Text("Message Copilot...") },
-                shape = RoundedCornerShape(26.dp),
-                maxLines = 5,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = {
-                    if (!isLoading) onSend()
-                })
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            if (isLoading) {
-                FilledIconButton(
-                    onClick = onStop,
-                    modifier = Modifier.size(48.dp),
-                    shape = CircleShape,
-                    colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.error,
-                        contentColor = MaterialTheme.colorScheme.onError
-                    )
-                ) {
-                    Icon(Icons.Default.Stop, contentDescription = "Stop generation")
+    val slashCommands = listOf(
+        "/help" to "Show available commands",
+        "/clear" to "Clear current conversation",
+        "/new" to "New conversation",
+        "/model" to "Switch model",
+        "/system" to "Set system prompt",
+        "/bridge" to "Check bridge status"
+    )
+    val showSuggestions = value.startsWith("/") && !value.contains(" ") && !isLoading
+
+    Column {
+        if (showSuggestions) {
+            val filtered = slashCommands.filter { (cmd, _) -> cmd.startsWith(value) }
+            if (filtered.isNotEmpty()) {
+                Surface(shadowElevation = 4.dp, tonalElevation = 2.dp) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        filtered.forEach { (cmd, desc) ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onValueChange(cmd + " ") }
+                                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = cmd,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.width(100.dp)
+                                )
+                                Text(
+                                    text = desc,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
                 }
-            } else {
+            }
+        }
+
+        Surface(shadowElevation = 8.dp) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .imePadding()
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.Bottom
+            ) {
                 FilledIconButton(
-                    onClick = onSend,
-                    enabled = value.isNotBlank(),
+                    onClick = onVoiceInput,
+                    enabled = !isLoading,
                     modifier = Modifier.size(48.dp),
                     shape = CircleShape
                 ) {
-                    Icon(Icons.Default.ArrowUpward, contentDescription = "Send")
+                    Icon(Icons.Default.Mic, contentDescription = "Voice input")
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                androidx.compose.material3.OutlinedTextField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    modifier = Modifier.weight(1f),
+                    enabled = !isLoading,
+                    placeholder = { Text("Message or /command…") },
+                    shape = RoundedCornerShape(26.dp),
+                    maxLines = 5,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = {
+                        if (!isLoading) onSend()
+                    })
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                if (isLoading) {
+                    FilledIconButton(
+                        onClick = onStop,
+                        modifier = Modifier.size(48.dp),
+                        shape = CircleShape,
+                        colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError
+                        )
+                    ) {
+                        Icon(Icons.Default.Stop, contentDescription = "Stop generation")
+                    }
+                } else {
+                    FilledIconButton(
+                        onClick = onSend,
+                        enabled = value.isNotBlank(),
+                        modifier = Modifier.size(48.dp),
+                        shape = CircleShape
+                    ) {
+                        Icon(Icons.Default.ArrowUpward, contentDescription = "Send")
+                    }
                 }
             }
         }
@@ -638,6 +703,12 @@ private fun MessageBubble(
             modifier = Modifier.widthIn(max = 320.dp),
             horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
         ) {
+            // Tool call cards (shown before the final text response)
+            if (!isUser && message.toolEvents.isNotEmpty()) {
+                ToolEventsCard(toolEvents = message.toolEvents)
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+
             Surface(
                 shape = RoundedCornerShape(
                     topStart = if (isUser) 20.dp else 8.dp,
@@ -731,6 +802,98 @@ private fun TypingIndicator(modifier: Modifier = Modifier) {
                     .clip(CircleShape)
                     .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha))
             )
+        }
+    }
+}
+
+@Composable
+private fun ToolEventsCard(toolEvents: List<ToolEvent>) {
+    var expanded by remember { mutableStateOf(false) }
+
+    // Group tool calls with their results
+    val callEvents = toolEvents.filter { it.type == "call" }
+
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f),
+        modifier = Modifier
+            .fillMaxWidth(0.9f)
+            .clickable { expanded = !expanded }
+    ) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = if (toolEvents.any { it.isError }) "⚠ " else "⚡ ",
+                    fontSize = 12.sp
+                )
+                Text(
+                    text = if (callEvents.size == 1)
+                        "Used tool: ${callEvents[0].name}"
+                    else
+                        "Used ${callEvents.size} tools: ${callEvents.joinToString(", ") { it.name }}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = if (expanded) "▲" else "▼",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+            }
+
+            if (expanded) {
+                Spacer(modifier = Modifier.height(6.dp))
+                toolEvents.forEach { event ->
+                    when (event.type) {
+                        "call" -> {
+                            Text(
+                                text = "▶ ${event.name}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                            if (event.detail != "{}") {
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        text = event.detail,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        modifier = Modifier.padding(6.dp),
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
+                        }
+                        "result" -> {
+                            Text(
+                                text = "← ${event.name}${if (event.isError) " (error)" else ""}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (event.isError) MaterialTheme.colorScheme.error
+                                        else MaterialTheme.colorScheme.onTertiaryContainer,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                            val preview = event.detail.take(200) + if (event.detail.length > 200) "…" else ""
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = preview,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    modifier = Modifier.padding(6.dp),
+                                    color = if (event.isError) MaterialTheme.colorScheme.error
+                                            else MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

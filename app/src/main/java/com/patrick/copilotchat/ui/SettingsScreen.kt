@@ -1,6 +1,5 @@
 package com.patrick.copilotchat.ui
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -24,6 +23,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun SettingsScreen(
     prefs: AppPreferences,
+    viewModel: ChatViewModel,
     onBack: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
@@ -32,9 +32,11 @@ fun SettingsScreen(
     var token by remember { mutableStateOf(prefs.githubToken) }
     var selectedModel by remember { mutableStateOf(prefs.selectedModel) }
     var systemPrompt by remember { mutableStateOf(prefs.systemPrompt) }
+    var bridgeUrl by remember { mutableStateOf(prefs.bridgeUrl) }
     var showToken by remember { mutableStateOf(false) }
     var showModelDropdown by remember { mutableStateOf(false) }
-    var saveStatus by remember { mutableStateOf("") } // "", "saving", "saved", "error"
+    var saveStatus by remember { mutableStateOf("") }
+    var bridgeStatus by remember { mutableStateOf("") } // "", "checking", "online", "offline"
     var displayModels by remember { mutableStateOf(prefs.supportedModels) }
 
     Scaffold(
@@ -46,6 +48,7 @@ fun SettingsScreen(
                         prefs.githubToken = token
                         prefs.selectedModel = selectedModel
                         prefs.systemPrompt = systemPrompt
+                        prefs.bridgeUrl = bridgeUrl
                         onBack()
                     }) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
@@ -62,9 +65,83 @@ fun SettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Token section
-            Text("GitHub Token", style = MaterialTheme.typography.labelLarge,
+            // ── Bridge Server ─────────────────────────────────────────────
+            Text("Bridge Server (Recommended)", style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.primary)
+
+            Card(colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.secondaryContainer
+            )) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("The bridge server runs in your UserLAnd terminal and enables:",
+                        style = MaterialTheme.typography.bodySmall)
+                    Text("• Auto-reads your token (no manual entry needed)",
+                        style = MaterialTheme.typography.bodySmall)
+                    Text("• bash, file read/write, list tools",
+                        style = MaterialTheme.typography.bodySmall)
+                    Text("• Full agentic loop like the Copilot CLI",
+                        style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(4.dp))
+                    Text("Start it: python3 ~/copilot-bridge/bridge.py",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer)
+                }
+            }
+
+            OutlinedTextField(
+                value = bridgeUrl,
+                onValueChange = { bridgeUrl = it; bridgeStatus = "" },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Bridge URL") },
+                placeholder = { Text("http://localhost:8765") },
+                singleLine = true,
+                supportingText = {
+                    when (bridgeStatus) {
+                        "online"   -> Text("🟢 Bridge is online", color = MaterialTheme.colorScheme.primary)
+                        "offline"  -> Text("🔴 Not reachable — start the bridge in UserLAnd",
+                            color = MaterialTheme.colorScheme.error)
+                        "checking" -> Text("Checking…")
+                        else -> Text("Default: http://localhost:8765")
+                    }
+                }
+            )
+
+            Button(
+                onClick = {
+                    bridgeStatus = "checking"
+                    prefs.bridgeUrl = bridgeUrl
+                    scope.launch {
+                        val available = api.isBridgeAvailable(bridgeUrl)
+                        bridgeStatus = if (available) "online" else "offline"
+                        viewModel.checkBridge()
+                        if (available) {
+                            // Refresh model list via bridge
+                            val models = api.fetchModelsViaBridge(bridgeUrl)
+                            if (models != null) {
+                                prefs.tokenModelIds = models
+                                displayModels = prefs.supportedModels
+                                if (displayModels.none { it.first == selectedModel }) {
+                                    selectedModel = displayModels.firstOrNull()?.first ?: "gpt-4o"
+                                }
+                            }
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = bridgeStatus != "checking"
+            ) {
+                Text(if (bridgeStatus == "checking") "Checking…" else "Test Bridge Connection")
+            }
+
+            HorizontalDivider()
+
+            // ── Token (fallback when bridge offline) ─────────────────────
+            Text("GitHub Token (Fallback)", style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary)
+            Text("Used when the bridge server is not running.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+
             OutlinedTextField(
                 value = token,
                 onValueChange = { token = it; saveStatus = "" },
@@ -80,14 +157,12 @@ fun SettingsScreen(
                             contentDescription = if (showToken) "Hide" else "Show")
                     }
                 },
-                supportingText = {
-                    Text("Your Copilot token — see instructions below")
-                }
+                supportingText = { Text("cat ~/.copilot/config.json → copilotTokens value") }
             )
 
             HorizontalDivider()
 
-            // Model section
+            // ── Model ─────────────────────────────────────────────────────
             Text("AI Model", style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.primary)
 
@@ -118,7 +193,7 @@ fun SettingsScreen(
 
             HorizontalDivider()
 
-            // System prompt
+            // ── System Prompt ─────────────────────────────────────────────
             Text("System Prompt", style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.primary)
             OutlinedTextField(
@@ -136,13 +211,13 @@ fun SettingsScreen(
                 onClick = {
                     saveStatus = "saving"
                     prefs.githubToken = token
+                    prefs.bridgeUrl = bridgeUrl
                     prefs.systemPrompt = systemPrompt
                     scope.launch {
                         val models = api.fetchAvailableModels(token.trim())
                         if (models != null) {
                             prefs.tokenModelIds = models
                             displayModels = prefs.supportedModels
-                            // If current selection not in new model list, pick the best available
                             if (displayModels.none { it.first == selectedModel }) {
                                 selectedModel = displayModels.firstOrNull()?.first ?: "gpt-4o"
                             }
@@ -155,43 +230,11 @@ fun SettingsScreen(
                 enabled = saveStatus != "saving"
             ) {
                 Text(when (saveStatus) {
-                    "saving" -> "Checking token…"
-                    "saved"  -> "Saved ✓ (${displayModels.size} models available)"
-                    "error"  -> "Saved (couldn't fetch models)"
+                    "saving" -> "Saving…"
+                    "saved"  -> "Saved ✓ (${displayModels.size} models)"
+                    "error"  -> "Saved (token check failed)"
                     else     -> "Save Settings"
                 })
-            }
-
-            if (saveStatus == "error") {
-                Card(colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer
-                )) {
-                    Text(
-                        "Could not verify token or fetch model list. Check your token and internet connection.",
-                        modifier = Modifier.padding(12.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onErrorContainer
-                    )
-                }
-            }
-
-            if (!token.startsWith("gh")) {
-                Card(colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.tertiaryContainer
-                )) {
-                    Column(modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("Where to find your token", style = MaterialTheme.typography.labelMedium)
-                        Text("In your terminal, run:", style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onTertiaryContainer)
-                        Text("  cat ~/.config/github-copilot/hosts.json", style = MaterialTheme.typography.bodySmall)
-                        Text("  Copy the gho_... value from \"copilotTokens\"", style = MaterialTheme.typography.bodySmall)
-                        Spacer(Modifier.height(4.dp))
-                        Text("Or create a new PAT:", style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onTertiaryContainer)
-                        Text("  github.com/settings/tokens → Generate new token (classic) → repo scope", style = MaterialTheme.typography.bodySmall)
-                    }
-                }
             }
         }
     }

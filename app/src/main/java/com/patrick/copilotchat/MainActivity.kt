@@ -34,11 +34,12 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             CopilotChatTheme {
-                var showSettings by remember { mutableStateOf(!prefs.isConfigured) }
+                var showSettings by remember { mutableStateOf(!prefs.isConfigured && prefs.bridgeUrl.contains("localhost")) }
 
                 if (showSettings) {
                     SettingsScreen(
                         prefs = prefs,
+                        viewModel = viewModel,
                         onBack = { showSettings = false }
                     )
                 } else {

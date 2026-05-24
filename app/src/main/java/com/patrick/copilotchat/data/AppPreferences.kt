@@ -50,6 +50,11 @@ class AppPreferences(context: Context) {
         ) ?: "You are a helpful AI assistant. Be concise and friendly."
         set(value) = prefs.edit().putString("system_prompt", value).apply()
 
+    /** URL of the local Copilot bridge server (default: localhost:8765). */
+    var bridgeUrl: String
+        get() = prefs.getString("bridge_url", "http://localhost:8765") ?: "http://localhost:8765"
+        set(value) = prefs.edit().putString("bridge_url", value.trimEnd('/')).apply()
+
     val isConfigured: Boolean
         get() = githubToken.isNotBlank()
 }
