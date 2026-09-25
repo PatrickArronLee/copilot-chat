@@ -1,7 +1,7 @@
 #!/bin/bash
 # Run this in Termux to install the Copilot Chat Bridge
 set -e
-curl -sL https://raw.githubusercontent.com/PatrickArronLee/copilot-chat/master/bridge.py -o ~/bridge.py
+curl -sL https://raw.githubusercontent.com/PatrickArronLee/copilot-chat/main/bridge.py -o ~/bridge.py
 echo "Downloaded bridge.py to ~/bridge.py"
 echo ""
 echo "Start with:"

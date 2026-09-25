@@ -6,6 +6,6 @@ if [ -z "$TOKEN" ]; then
   exit 1
 fi
 echo "Downloading bridge.py..."
-curl -sL https://raw.githubusercontent.com/PatrickArronLee/copilot-chat/master/bridge.py -o ~/bridge.py
+curl -sL https://raw.githubusercontent.com/PatrickArronLee/copilot-chat/main/bridge.py -o ~/bridge.py
 echo "Starting bridge..."
 python3 ~/bridge.py --token "$TOKEN"

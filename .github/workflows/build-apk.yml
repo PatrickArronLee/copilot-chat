@@ -2,7 +2,7 @@ name: Build Copilot Chat APK
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
