@@ -1,5 +1,7 @@
 # Copilot Chat for Android
 
+![Copilot Chat for Android](docs/images/copilot-chat-android.jpg)
+
 Copilot Chat is a native Android app for agentic chat with GitHub Copilot. It provides a Compose-based chat experience that streams responses, retains conversations on-device, and lets a model use local tools to work with files and shell commands on the device.
 
 ## What it does
